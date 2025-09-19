@@ -1,0 +1,20 @@
+{
+  "name": "pocketcity2-save-editor",
+  "version": "0.0.1",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "electron ./electron/main.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "electron": "^38.1.2",
+    "json5": "^2.2.3",
+    "pako": "^2.1.0"
+  },
+  "devDependencies": {
+    "electron-builder": "^26.0.12"
+  }
+}
