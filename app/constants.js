@@ -17,6 +17,29 @@ const RESOURCE_MAP = {
   9: "Bag of Soil",
 };
 
+/**
+ * Known NPC relationship ids → display name (UI helper only).
+ * The editor will still show / preserve unknown ids.
+ */
+const NPC_NAMES = {
+  0: "Anna",
+  1: "Officer Olivia",
+  2: "Chief Franklin",
+  3: "Barbara",
+  4: "Shawnathan",
+  5: "Small Business Owners",
+  6: "Ethan",
+  7: "Doctor Denise",
+  9: "Charles",
+  10: "Ranger Patrick",
+  11: "Megan",
+  12: "Vivian",
+  13: "Ruby",
+  50: "Citizens",
+  54: "Eddie",
+  75: "Workers",
+};
+
 /** Survival global upgrades: display name and per-upgrade max level. */
 const SURVIVAL_UPGRADES = {
   1: { name: "Extra Money", max: 3 },
@@ -74,4 +97,5 @@ module.exports = {
   DEFAULT_DIRS,
   SURVIVAL_UPGRADES,
   GLOBAL_LIMITS,
+  NPC_NAMES,
 };

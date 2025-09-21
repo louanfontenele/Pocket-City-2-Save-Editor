@@ -11,7 +11,7 @@ const {
   backupFolderFor,
   rotateBackups,
 } = require("./util");
-const { RESOURCE_MAP } = require("./constants");
+const { RESOURCE_MAP, NPC_NAMES } = require("./constants");
 
 const ES3_EXT = ".es3";
 
@@ -45,6 +45,23 @@ function tryExtractResources(text) {
     const id = Number(m[1]);
     const amt = Number(m[2]);
     out.push({ id, name: RESOURCE_MAP[id] || `#${id}`, amount: amt });
+  }
+  out.sort((a, b) => a.id - b.id);
+  return out;
+}
+
+/** Extract relationships map from raw text when JSON5 fails. */
+function tryExtractRelationships(text) {
+  const out = [];
+  const block = text.match(/["']?relationships["']?\s*:\s*\{([\s\S]*?)\}/);
+  if (!block) return out;
+  const body = block[1];
+  let m;
+  const re = /(\d+)\s*:\s*([0-9]+)/g;
+  while ((m = re.exec(body))) {
+    const id = Number(m[1]);
+    const lvl = Number(m[2]);
+    out.push({ id, name: NPC_NAMES[id] || `NPC #${id}`, level: lvl });
   }
   out.sort((a, b) => a.id - b.id);
   return out;
@@ -91,6 +108,7 @@ function tolerantSnapshot(text) {
     maxLevel,
     sandboxEnabled,
     resources: tryExtractResources(text),
+    relationships: tryExtractRelationships(text),
   };
 }
 
@@ -110,7 +128,23 @@ function mapResourceDict(dictLike) {
   return out;
 }
 
-/** Regex writer: patch simple scalars and (optionally) rebuild resources block.
+/** Convert a dict-like relationships object to an array for the UI. */
+function mapRelationshipDict(dictLike) {
+  const out = [];
+  if (!dictLike || typeof dictLike !== "object") return out;
+  for (const [key, val] of Object.entries(dictLike)) {
+    const idNum = Number(key);
+    out.push({
+      id: idNum,
+      name: NPC_NAMES[idNum] || `NPC #${idNum}`,
+      level: Number(val),
+    });
+  }
+  out.sort((a, b) => a.id - b.id);
+  return out;
+}
+
+/** Regex writer: patch simple scalars and (optionally) rebuild resources/relationships blocks.
  *  Used as a safe fallback when strict JSON5 parse fails.
  */
 function regexPatchEs3Text(text, patch) {
@@ -162,10 +196,9 @@ function regexPatchEs3Text(text, patch) {
     if (/"?resources"?\s*:\s*\{[\s\S]*?\}/.test(out)) {
       out = out.replace(
         /(["']?resources["']?\s*:\s*)\{[\s\S]*?\}/,
-        `$1{${block.slice(12, -1)}}`
+        `$1{${entries}\n}`
       );
     } else {
-      // Insert near known fields to keep structure readable
       if (/"?money"?\s*:/.test(out)) {
         out = out.replace(
           /(["']?money["']?\s*:[^,}\n\r]+,?)/,
@@ -177,6 +210,23 @@ function regexPatchEs3Text(text, patch) {
           `$1\n  ${block},`
         );
       }
+    }
+  }
+
+  // If relationships are provided, rebuild the entire object conservatively
+  if (patch.relationships && Array.isArray(patch.relationships)) {
+    const entries = patch.relationships
+      .filter((r) => r && typeof r.id !== "undefined")
+      .map((r) => `  ${Number(r.id)}: ${Math.max(0, Number(r.level) || 0)}`)
+      .join(",\n");
+    const block = `relationships: {\n${entries}\n}`;
+    if (/"?relationships"?\s*:\s*\{[\s\S]*?\}/.test(out)) {
+      out = out.replace(
+        /(["']?relationships["']?\s*:\s*)\{[\s\S]*?\}/,
+        `$1{${entries}\n}`
+      );
+    } else {
+      out = out.replace(/(CITY\s*:\s*\{\s*value\s*:\s*\{)/, `$1\n  ${block},`);
     }
   }
 
@@ -271,6 +321,7 @@ async function readSaveParsed(filePath) {
     const obj = parseLooseJson(text);
     const v = obj?.CITY?.value || {};
     const simpleResources = mapResourceDict(v.resources);
+    const rels = mapRelationshipDict(v.relationships);
     return {
       filePath,
       innerName,
@@ -294,6 +345,7 @@ async function readSaveParsed(filePath) {
         // Detect sandbox if any of the three flags is true
         sandboxEnabled: !!(v.unlockAll || v.infiniteMoney || v.maxLevel),
         resources: simpleResources,
+        relationships: rels,
       },
     };
   } catch (e) {
@@ -372,12 +424,27 @@ async function writeSaveFromPatch(filePath, patch) {
       }
     }
 
+    // Relationships (id => level)
+    if (patch.relationships && Array.isArray(patch.relationships)) {
+      if (!v.relationships || typeof v.relationships !== "object")
+        v.relationships = {};
+      for (const r of patch.relationships) {
+        if (
+          r &&
+          typeof r.id !== "undefined" &&
+          typeof r.level !== "undefined"
+        ) {
+          v.relationships[r.id] = Number(r.level);
+        }
+      }
+    }
+
     // Pretty JSON, keep numeric keys unquoted to match game's style
     const pretty = JSON.stringify(obj, null, 2).replace(/"(\d+)"\s*:/g, "$1:");
     writeEs3(filePath, pretty, innerName);
     return { ok: true, backupPath };
   } catch {
-    // Fallback: regex-based patch (also supports resources)
+    // Fallback: regex-based patch (also supports resources/relationships)
     // Enforce survival & map size rules using loose extractors
     const isSurvival = tryExtractBool(text, "isSurvivalMode", false);
     const curSize = Number(tryExtractScalar(text, "mapSize", 40)) || 40;
@@ -394,7 +461,6 @@ async function writeSaveFromPatch(filePath, patch) {
       const desired = Number(patch2.mapSize);
       const clamped = Math.max(40, Math.min(88, desired));
       const effective = Math.max(curSize, clamped);
-      // If effective equals current, we can skip to avoid unnecessary write
       if (effective <= curSize) {
         delete patch2.mapSize;
       } else {

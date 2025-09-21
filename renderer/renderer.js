@@ -1,5 +1,5 @@
 // renderer/renderer.js
-// Frontend logic: scanning, filtering, editing, bulk ops, and GLOBAL survival settings.
+// Frontend logic: scanning, filtering, editing, bulk ops, NPC relationships, and GLOBAL survival settings.
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -26,6 +26,26 @@ const RESOURCE_NAMES = {
   7: "Intellectual Property",
   8: "Seedling",
   9: "Bag of Soil",
+};
+
+// Local NPC relationship names (UI only, mirrors constants.js)
+const NPC_NAMES = {
+  0: "Anna",
+  1: "Officer Olivia",
+  2: "Chief Franklin",
+  3: "Barbara",
+  4: "Shawnathan",
+  5: "Small Business Owners",
+  6: "Ethan",
+  7: "Doctor Denise",
+  9: "Charles",
+  10: "Ranger Patrick",
+  11: "Megan",
+  12: "Vivian",
+  13: "Ruby",
+  50: "Citizens",
+  54: "Eddie",
+  75: "Workers",
 };
 
 // ---------- Sorting helpers ----------
@@ -372,20 +392,49 @@ async function openEditor(filePath) {
   f.sandbox.disabled = !!data.snapshot.isSurvivalMode;
 
   // Resources
-  const existing = {};
-  (data.snapshot.resources || []).forEach((r) => (existing[r.id] = r.amount));
+  const existingRes = {};
+  (data.snapshot.resources || []).forEach(
+    (r) => (existingRes[r.id] = r.amount)
+  );
   const resList = $("#resList");
   resList.innerHTML = "";
   for (let id = 0; id <= 9; id++) {
     const row = document.createElement("div");
     row.className = "resrow";
-    const amount = existing[id] ?? 0;
+    const amount = existingRes[id] ?? 0;
     row.innerHTML = `
       <div class="resname">${RESOURCE_NAMES[id]} <span class="badge">#${id}</span></div>
       <input type="number" step="1" min="0" value="${amount}" data-res-id="${id}">
     `;
     resList.appendChild(row);
   }
+
+  // Relationships
+  const existingRel = {};
+  (data.snapshot.relationships || []).forEach(
+    (r) => (existingRel[r.id] = r.level)
+  );
+  const relList = $("#relList");
+  relList.innerHTML = "";
+  // union of known ids + any found in save
+  const allIds = new Set([
+    ...Object.keys(NPC_NAMES).map(Number),
+    ...Object.keys(existingRel).map(Number),
+  ]);
+  Array.from(allIds)
+    .sort((a, b) => a - b)
+    .forEach((id) => {
+      const level = existingRel[id] ?? 0;
+      const row = document.createElement("div");
+      row.className = "resrow";
+      row.innerHTML = `
+        <div class="resname">${
+          NPC_NAMES[id] || `NPC #${id}`
+        } <span class="badge">#${id}</span></div>
+        <input type="number" step="1" min="0" value="${level}" data-rel-id="${id}">
+      `;
+      relList.appendChild(row);
+    });
 
   openDrawer();
 }
@@ -407,6 +456,10 @@ async function onSubmitEdit(e) {
     id: Number(inp.dataset.resId),
     amount: Number(inp.value),
   }));
+  const relationships = $$("#relList input").map((inp) => ({
+    id: Number(inp.dataset.relId),
+    level: Number(inp.value),
+  }));
 
   const curSize = Number(currentEdit.snapshot.mapSize || 40);
   const selectedSize = Number(f.mapSize.value || curSize);
@@ -424,6 +477,7 @@ async function onSubmitEdit(e) {
       ? {}
       : { sandbox: !!f.sandbox.checked }),
     resources,
+    relationships,
   };
 
   if (!canGrow && selectedSize !== curSize) {
@@ -470,11 +524,17 @@ async function onDeleteSave() {
 // --- Bulk helpers ---
 
 function buildMaxPatch() {
+  // Build relationships: set all known NPCs to 50
+  const rel = Object.keys(NPC_NAMES).map((id) => ({
+    id: Number(id),
+    level: 50,
+  }));
   return {
     level: 1000,
     money: 1000000000000, // 1 Trillion
     researchPoints: 999999,
     resources: Array.from({ length: 10 }, (_, id) => ({ id, amount: 999999 })),
+    relationships: rel,
   };
 }
 function buildResetDayPatch() {
