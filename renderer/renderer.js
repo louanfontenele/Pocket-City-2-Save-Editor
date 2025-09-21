@@ -1,5 +1,6 @@
 // renderer/renderer.js
-// Frontend logic: scanning, filtering, editing, bulk ops, NPC relationships, and GLOBAL survival settings.
+// Frontend logic: scanning, filtering, editing, bulk ops, NPC relationships,
+// vehicles (unlockedCars), and GLOBAL survival settings.
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -47,6 +48,9 @@ const NPC_NAMES = {
   54: "Eddie",
   75: "Workers",
 };
+
+// Car id range (based on your list 0..26)
+const CAR_MAX_ID = 26;
 
 // ---------- Sorting helpers ----------
 
@@ -109,6 +113,14 @@ async function init() {
   $("#editForm").addEventListener("submit", onSubmitEdit);
   $("#btnDeleteSave").addEventListener("click", onDeleteSave);
   $("#btnOpenBackupFolder").addEventListener("click", onRevealBackupFolder);
+
+  // Cars quick actions
+  $("#btnUnlockAllCars").addEventListener("click", () => {
+    $$("#carList input[type='checkbox']").forEach((c) => (c.checked = true));
+  });
+  $("#btnLockAllCars").addEventListener("click", () => {
+    $$("#carList input[type='checkbox']").forEach((c) => (c.checked = false));
+  });
 
   // Search & filters
   $("#searchHome").addEventListener("input", (e) => {
@@ -388,6 +400,18 @@ async function openEditor(filePath) {
   f.difficulty.value = data.snapshot.difficulty ?? 1;
   f.sandbox.checked = !!data.snapshot.sandboxEnabled;
 
+  // Level: populate correctly; hide/disable in Survival saves
+  const levelRow = $("#levelRow");
+  if (data.snapshot.isSurvivalMode) {
+    levelRow.style.display = "none";
+    f.level.value = "";
+    f.level.disabled = true;
+  } else {
+    levelRow.style.display = "";
+    f.level.disabled = false;
+    f.level.value = data.snapshot.level ?? 0;
+  }
+
   // Disable sandbox toggle in Survival maps
   f.sandbox.disabled = !!data.snapshot.isSurvivalMode;
 
@@ -416,7 +440,6 @@ async function openEditor(filePath) {
   );
   const relList = $("#relList");
   relList.innerHTML = "";
-  // union of known ids + any found in save
   const allIds = new Set([
     ...Object.keys(NPC_NAMES).map(Number),
     ...Object.keys(existingRel).map(Number),
@@ -435,6 +458,24 @@ async function openEditor(filePath) {
       `;
       relList.appendChild(row);
     });
+
+  // Vehicles (unlockedCars) — show 0..CAR_MAX_ID checkboxes
+  const carFlags = {};
+  (data.snapshot.unlockedCars || []).forEach(
+    (c) => (carFlags[c.id] = !!c.unlocked)
+  );
+  const carList = $("#carList");
+  carList.innerHTML = "";
+  for (let id = 0; id <= CAR_MAX_ID; id++) {
+    const row = document.createElement("div");
+    row.className = "resrow";
+    const checked = carFlags[id] ? "checked" : "";
+    row.innerHTML = `
+      <div class="resname">Car #${id}</div>
+      <input type="checkbox" ${checked} data-car-id="${id}">
+    `;
+    carList.appendChild(row);
+  }
 
   openDrawer();
 }
@@ -460,6 +501,10 @@ async function onSubmitEdit(e) {
     id: Number(inp.dataset.relId),
     level: Number(inp.value),
   }));
+  const unlockedCars = $$("#carList input[type='checkbox']").map((inp) => ({
+    id: Number(inp.dataset.carId),
+    unlocked: !!inp.checked,
+  }));
 
   const curSize = Number(currentEdit.snapshot.mapSize || 40);
   const selectedSize = Number(f.mapSize.value || curSize);
@@ -475,9 +520,13 @@ async function onSubmitEdit(e) {
     difficulty: Number(f.difficulty.value),
     ...(currentEdit.snapshot.isSurvivalMode
       ? {}
+      : { level: Number(f.level.value || 0) }),
+    ...(currentEdit.snapshot.isSurvivalMode
+      ? {}
       : { sandbox: !!f.sandbox.checked }),
     resources,
     relationships,
+    unlockedCars,
   };
 
   if (!canGrow && selectedSize !== curSize) {
@@ -524,17 +573,24 @@ async function onDeleteSave() {
 // --- Bulk helpers ---
 
 function buildMaxPatch() {
-  // Build relationships: set all known NPCs to 50
+  // Relationships: set all known NPCs to 50
   const rel = Object.keys(NPC_NAMES).map((id) => ({
     id: Number(id),
     level: 50,
   }));
+  // Cars: unlock all from 0..CAR_MAX_ID
+  const cars = Array.from({ length: CAR_MAX_ID + 1 }, (_, id) => ({
+    id,
+    unlocked: true,
+  }));
+
   return {
     level: 1000,
     money: 1000000000000, // 1 Trillion
     researchPoints: 999999,
     resources: Array.from({ length: 10 }, (_, id) => ({ id, amount: 999999 })),
     relationships: rel,
+    unlockedCars: cars,
   };
 }
 function buildResetDayPatch() {

@@ -55,7 +55,7 @@
       <section id="groups" class="cardgrid"></section>
     </main>
 
-    <!-- Survival Global Settings (only editable fields; preserved fields are hidden) -->
+    <!-- Survival Global Settings -->
     <main id="pageGlobals" class="page">
       <div class="mapHeader">
         <h2>Survival Global Settings</h2>
@@ -237,7 +237,12 @@
               >Research Points<input name="researchPoints" type="number"
             /></label>
             <label>Day<input name="day" type="number" min="1" /></label>
-            <label>Level<input name="level" type="number" min="0" /></label>
+
+            <!-- Level row has an id so we can hide/disable for Survival saves -->
+            <label id="levelRow"
+              >Level<input name="level" type="number" min="0"
+            /></label>
+
             <label>
               Map Size
               <select name="mapSize">
@@ -273,6 +278,13 @@
           <p class="hint">
             Levels are free-form; "Set Max" uses 50 for all known NPCs.
           </p>
+
+          <h3>Vehicles</h3>
+          <div id="carList" class="resgrid"></div>
+          <div class="actions">
+            <button type="button" id="btnUnlockAllCars">Unlock all cars</button>
+            <button type="button" id="btnLockAllCars">Lock all cars</button>
+          </div>
 
           <div class="actions">
             <button type="submit" class="primary">

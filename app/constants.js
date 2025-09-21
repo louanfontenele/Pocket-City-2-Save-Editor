@@ -61,6 +61,13 @@ const GLOBAL_LIMITS = {
   TOTAL_UPGRADE_POINTS_MAX: 999_999,
 };
 
+/**
+ * Max known car id for unlockedCars UI.
+ * The sample shows ids 0..26; use 26 as a sane default while still reading
+ * any ids that appear in the file even if > 26.
+ */
+const CAR_MAX_ID_DEFAULT = 26;
+
 function DEFAULT_DIRS(homedir, platform) {
   const dirs = [];
   // Windows
@@ -98,4 +105,5 @@ module.exports = {
   SURVIVAL_UPGRADES,
   GLOBAL_LIMITS,
   NPC_NAMES,
+  CAR_MAX_ID_DEFAULT,
 };

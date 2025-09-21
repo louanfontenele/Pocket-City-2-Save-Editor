@@ -67,6 +67,23 @@ function tryExtractRelationships(text) {
   return out;
 }
 
+/** Extract unlocked cars map (boolean flags) when JSON5 fails. */
+function tryExtractUnlockedCars(text) {
+  const block = text.match(/["']?unlockedCars["']?\s*:\s*\{([\s\S]*?)\}/);
+  if (!block) return [];
+  const body = block[1];
+  const out = [];
+  let m;
+  const re = /(\d+)\s*:\s*(true|false)/gi;
+  while ((m = re.exec(body))) {
+    const id = Number(m[1]);
+    const unlocked = String(m[2]).toLowerCase() === "true";
+    out.push({ id, unlocked });
+  }
+  out.sort((a, b) => a.id - b.id);
+  return out;
+}
+
 /** Snapshot builder used for tolerant mode (read-only UI).
  *  NOTE: We extract sandbox-related booleans here as well so the UI reflects
  *  sandbox state even when strict JSON parsing fails.
@@ -109,6 +126,7 @@ function tolerantSnapshot(text) {
     sandboxEnabled,
     resources: tryExtractResources(text),
     relationships: tryExtractRelationships(text),
+    unlockedCars: tryExtractUnlockedCars(text),
   };
 }
 
@@ -144,7 +162,19 @@ function mapRelationshipDict(dictLike) {
   return out;
 }
 
-/** Regex writer: patch simple scalars and (optionally) rebuild resources/relationships blocks.
+/** Convert a dict-like unlockedCars object (booleans) to array for the UI. */
+function mapUnlockedCarsDict(dictLike) {
+  const out = [];
+  if (!dictLike || typeof dictLike !== "object") return out;
+  for (const [key, val] of Object.entries(dictLike)) {
+    const idNum = Number(key);
+    out.push({ id: idNum, unlocked: !!val });
+  }
+  out.sort((a, b) => a.id - b.id);
+  return out;
+}
+
+/** Regex writer: patch simple scalars and (optionally) rebuild resources/relationships/cars blocks.
  *  Used as a safe fallback when strict JSON5 parse fails.
  */
 function regexPatchEs3Text(text, patch) {
@@ -223,6 +253,23 @@ function regexPatchEs3Text(text, patch) {
     if (/"?relationships"?\s*:\s*\{[\s\S]*?\}/.test(out)) {
       out = out.replace(
         /(["']?relationships["']?\s*:\s*)\{[\s\S]*?\}/,
+        `$1{${entries}\n}`
+      );
+    } else {
+      out = out.replace(/(CITY\s*:\s*\{\s*value\s*:\s*\{)/, `$1\n  ${block},`);
+    }
+  }
+
+  // If unlockedCars are provided, rebuild the entire object conservatively
+  if (patch.unlockedCars && Array.isArray(patch.unlockedCars)) {
+    const entries = patch.unlockedCars
+      .filter((c) => c && typeof c.id !== "undefined")
+      .map((c) => `  ${Number(c.id)}: ${c.unlocked ? "true" : "false"}`)
+      .join(",\n");
+    const block = `unlockedCars: {\n${entries}\n}`;
+    if (/"?unlockedCars"?\s*:\s*\{[\s\S]*?\}/.test(out)) {
+      out = out.replace(
+        /(["']?unlockedCars["']?\s*:\s*)\{[\s\S]*?\}/,
         `$1{${entries}\n}`
       );
     } else {
@@ -322,6 +369,7 @@ async function readSaveParsed(filePath) {
     const v = obj?.CITY?.value || {};
     const simpleResources = mapResourceDict(v.resources);
     const rels = mapRelationshipDict(v.relationships);
+    const cars = mapUnlockedCarsDict(v.unlockedCars);
     return {
       filePath,
       innerName,
@@ -346,6 +394,7 @@ async function readSaveParsed(filePath) {
         sandboxEnabled: !!(v.unlockAll || v.infiniteMoney || v.maxLevel),
         resources: simpleResources,
         relationships: rels,
+        unlockedCars: cars,
       },
     };
   } catch (e) {
@@ -439,12 +488,23 @@ async function writeSaveFromPatch(filePath, patch) {
       }
     }
 
+    // Unlocked cars (id => boolean)
+    if (patch.unlockedCars && Array.isArray(patch.unlockedCars)) {
+      if (!v.unlockedCars || typeof v.unlockedCars !== "object")
+        v.unlockedCars = {};
+      for (const c of patch.unlockedCars) {
+        if (c && typeof c.id !== "undefined") {
+          v.unlockedCars[c.id] = !!c.unlocked;
+        }
+      }
+    }
+
     // Pretty JSON, keep numeric keys unquoted to match game's style
     const pretty = JSON.stringify(obj, null, 2).replace(/"(\d+)"\s*:/g, "$1:");
     writeEs3(filePath, pretty, innerName);
     return { ok: true, backupPath };
   } catch {
-    // Fallback: regex-based patch (also supports resources/relationships)
+    // Fallback: regex-based patch (also supports resources/relationships/cars)
     // Enforce survival & map size rules using loose extractors
     const isSurvival = tryExtractBool(text, "isSurvivalMode", false);
     const curSize = Number(tryExtractScalar(text, "mapSize", 40)) || 40;
