@@ -1,37 +1,40 @@
-// electron/preload.js
-// Expose a safe IPC bridge to the renderer.
+// Electron preload script
+// Exposes IPC bridge to the renderer via contextBridge.
 
 const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("pc2", {
-  // Theme
-  getTheme: () => ipcRenderer.invoke("theme:get"),
+contextBridge.exposeInMainWorld("electronAPI", {
+  platform: process.platform,
+  isElectron: true,
 
-  // Folder selection
-  openDirDialog: () => ipcRenderer.invoke("dialog:openDir"),
-
-  // Save files
-  scanSaves: (customDir) => ipcRenderer.invoke("saves:scan", customDir),
-  readSave: (filePath) => ipcRenderer.invoke("save:read", filePath),
+  // ---- Saves ----
+  scanSaves: () => ipcRenderer.invoke("saves:scan"),
+  readSave: (filePath) => ipcRenderer.invoke("saves:read", { filePath }),
   patchSave: (filePath, patch) =>
-    ipcRenderer.invoke("save:patch", { filePath, patch }),
-  bulkPatch: (filePaths, patch) =>
-    ipcRenderer.invoke("save:bulkPatch", { filePaths, patch }),
-  deleteSave: (filePath) => ipcRenderer.invoke("save:delete", { filePath }),
+    ipcRenderer.invoke("saves:patch", { filePath, patch }),
+  deleteSave: (filePath) => ipcRenderer.invoke("saves:delete", { filePath }),
+  bulkPatchSaves: (action, scope, groupId) =>
+    ipcRenderer.invoke("saves:bulkPatch", { action, scope, groupId }),
 
-  // Backups
+  // ---- Backups ----
   listBackups: (filePath) => ipcRenderer.invoke("backups:list", { filePath }),
   restoreBackup: (filePath, backupPath) =>
     ipcRenderer.invoke("backups:restore", { filePath, backupPath }),
 
-  // Shell
-  revealInFolder: (fullPath) => ipcRenderer.invoke("shell:reveal", fullPath),
-
-  // Survival Global Settings
-  readGlobalSettings: (dataDir = null) =>
-    ipcRenderer.invoke("globals:read", { dataDir }),
-  writeGlobalSettings: (patch, dataDir = null) =>
+  // ---- Global settings ----
+  readGlobals: (dataDir) => ipcRenderer.invoke("globals:read", { dataDir }),
+  writeGlobals: (dataDir, patch) =>
     ipcRenderer.invoke("globals:write", { dataDir, patch }),
-  deleteGlobalSettings: (dataDir = null) =>
-    ipcRenderer.invoke("globals:delete", { dataDir }),
+  deleteGlobals: (dataDir) => ipcRenderer.invoke("globals:delete", { dataDir }),
+
+  // ---- Directories ----
+  collectDirs: () => ipcRenderer.invoke("dirs:collect"),
+  defaultDirs: () => ipcRenderer.invoke("dirs:defaults"),
+
+  // ---- File watcher events (push from main) ----
+  onSavesChanged: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("saves:changed", handler);
+    return () => ipcRenderer.removeListener("saves:changed", handler);
+  },
 });
