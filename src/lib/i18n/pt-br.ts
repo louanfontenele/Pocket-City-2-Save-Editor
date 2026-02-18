@@ -293,4 +293,13 @@ export const ptBr: Record<string, string> = {
 
   // Save details title
   "page.saveDetails.title": "Detalhes do Save",
+
+  // Changelog
+  "sidebar.changelog": "Changelog",
+  "page.changelog.title": "Changelog",
+  "page.changelog.description": "Histórico de versões e notas de lançamento",
+  "changelog.currentVersion": "Versão Atual",
+  "changelog.runningVersion": "Você está usando esta versão",
+  "changelog.history": "Histórico de Lançamentos",
+  "changelog.latest": "Mais recente",
 };

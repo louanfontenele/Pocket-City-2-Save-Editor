@@ -77,6 +77,11 @@ export function SaveDetailPage() {
   const [initialSnapshot, setInitialSnapshot] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
+  // Reset snapshot when navigating to a different save
+  useEffect(() => {
+    setInitialSnapshot(null);
+  }, [id]);
+
   const loadData = useCallback(async () => {
     const result = await window.electronAPI.scanSaves();
     if (result.ok && result.data) {
@@ -253,6 +258,7 @@ export function SaveDetailPage() {
         {/* Save Editor */}
         {initialSnapshot && (
           <SaveEditor
+            key={id}
             files={editorFiles}
             initialSnapshot={initialSnapshot}
             initialFilePath={representative.filePath}

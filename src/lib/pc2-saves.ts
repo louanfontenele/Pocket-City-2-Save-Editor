@@ -490,62 +490,46 @@ export async function writeSaveRelationships(
   const backup = await createSaveBackup(filePath).catch(() => null);
   const backupPath = backup?.backupPath;
   const { text } = await readEs3(filePath);
-  // Strict path: JSON5 parse
-  try {
-    const obj = parseLooseJson(text);
-    if (!obj?.CITY?.value) throw new Error("Missing CITY.value");
-    const r: Record<string, number> = {
-      ...(obj.CITY.value.relationships || {}),
-    };
-    for (const { id, level } of relationships) {
-      r[String(id)] = Number(level) || 0;
-    }
-    obj.CITY.value.relationships = r;
-    const out = stringifyWithUnquotedNumericKeys(obj);
-    await writeEs3(filePath, out);
-    return { ok: true, backupPath };
-  } catch {
-    // Fallback: regex rebuild of the relationships block only
-    const valuePos = findPathBlock(text, ["CITY", "value"]) ?? {
-      start: 0,
-      end: text.length,
-      indent: "",
-    };
-    const relPos = findFirstBlock(
-      text,
-      "relationships",
-      valuePos.start,
-      valuePos.end + 1,
-    );
-    if (!relPos) {
-      // Attempt to insert a brand-new relationships block inside value
-      const block = valuePos;
-      if (!block) return { ok: false, backupPath, fallback: true };
-      const innerOld = extractBlockInner(text, block);
-      const newInnerBlock = buildNumericObjectBlock(
-        relationships.map((x) => ({ id: x.id, value: Number(x.level) || 0 })),
-        block.indent + "  ",
-      );
-      const insertion = `\n${block.indent}  relationships: {${newInnerBlock}},\n${block.indent}`;
-      const newInner = innerOld.replace(/\s*$/, "") + insertion;
-      const newText = replaceBlock(text, block, newInner);
-      await writeEs3(filePath, newText);
-      return { ok: true, backupPath, fallback: true };
-    }
-    const block = { start: relPos.braceStart, end: relPos.braceEnd };
-    const indentBase = relPos.indent + "  ";
+  // Always use regex-based patching to preserve the game's non-standard JSON format.
+  const valuePos = findPathBlock(text, ["CITY", "value"]) ?? {
+    start: 0,
+    end: text.length,
+    indent: "",
+  };
+  const relPos = findFirstBlock(
+    text,
+    "relationships",
+    valuePos.start,
+    valuePos.end + 1,
+  );
+  if (!relPos) {
+    // Attempt to insert a brand-new relationships block inside value
+    const block = valuePos;
+    if (!block) return { ok: false, backupPath, fallback: true };
+    const innerOld = extractBlockInner(text, block);
     const newInnerBlock = buildNumericObjectBlock(
       relationships.map((x) => ({ id: x.id, value: Number(x.level) || 0 })),
-      indentBase,
+      block.indent + "  ",
     );
-    const newText =
-      text.slice(0, relPos.keyStart) +
-      `${relPos.indent}relationships: {${newInnerBlock}}` +
-      (relPos.hadTrailingComma ? "," : "") +
-      text.slice(relPos.braceEnd + (relPos.hadTrailingComma ? 2 : 1));
+    const insertion = `\n${block.indent}  relationships: {${newInnerBlock}},\n${block.indent}`;
+    const newInner = innerOld.replace(/\s*$/, "") + insertion;
+    const newText = replaceBlock(text, block, newInner);
     await writeEs3(filePath, newText);
     return { ok: true, backupPath, fallback: true };
   }
+  const block = { start: relPos.braceStart, end: relPos.braceEnd };
+  const indentBase = relPos.indent + "  ";
+  const newInnerBlock = buildNumericObjectBlock(
+    relationships.map((x) => ({ id: x.id, value: Number(x.level) || 0 })),
+    indentBase,
+  );
+  const newText =
+    text.slice(0, relPos.keyStart) +
+    `${relPos.indent}relationships: {${newInnerBlock}}` +
+    (relPos.hadTrailingComma ? "," : "") +
+    text.slice(relPos.braceEnd + (relPos.hadTrailingComma ? 2 : 1));
+  await writeEs3(filePath, newText);
+  return { ok: true, backupPath };
 }
 
 // -----------------------------
@@ -607,61 +591,49 @@ export async function writeSaveResources(
   const backup = await createSaveBackup(filePath).catch(() => null);
   const backupPath = backup?.backupPath;
   const { text } = await readEs3(filePath);
-  try {
-    const obj = parseLooseJson(text);
-    if (!obj?.CITY?.value) throw new Error("Missing CITY.value");
-    const r: Record<string, number> = { ...(obj.CITY.value.resources || {}) };
-    for (const { id, amount } of resources) {
-      r[String(id)] = Math.max(0, Number(amount) || 0);
-    }
-    obj.CITY.value.resources = r;
-    const out = stringifyWithUnquotedNumericKeys(obj);
-    await writeEs3(filePath, out);
-    return { ok: true, backupPath };
-  } catch {
-    const valuePos = findPathBlock(text, ["CITY", "value"]) ?? {
-      start: 0,
-      end: text.length,
-      indent: "",
-    };
-    const resPos = findFirstBlock(
-      text,
-      "resources",
-      valuePos.start,
-      valuePos.end + 1,
-    );
-    if (!resPos) {
-      const block = valuePos;
-      if (!block) return { ok: false, backupPath, fallback: true };
-      const innerOld = extractBlockInner(text, block);
-      const newInnerBlock = buildNumericObjectBlock(
-        resources.map((x) => ({
-          id: x.id,
-          value: Math.max(0, Number(x.amount) || 0),
-        })),
-        block.indent + "  ",
-      );
-      const insertion = `\n${block.indent}  resources: {${newInnerBlock}},\n${block.indent}`;
-      const newInner = innerOld.replace(/\s*$/, "") + insertion;
-      const newText = replaceBlock(text, block, newInner);
-      await writeEs3(filePath, newText);
-      return { ok: true, backupPath, fallback: true };
-    }
+  // Always use regex-based patching to preserve the game's non-standard JSON format.
+  const valuePos = findPathBlock(text, ["CITY", "value"]) ?? {
+    start: 0,
+    end: text.length,
+    indent: "",
+  };
+  const resPos = findFirstBlock(
+    text,
+    "resources",
+    valuePos.start,
+    valuePos.end + 1,
+  );
+  if (!resPos) {
+    const block = valuePos;
+    if (!block) return { ok: false, backupPath, fallback: true };
+    const innerOld = extractBlockInner(text, block);
     const newInnerBlock = buildNumericObjectBlock(
       resources.map((x) => ({
         id: x.id,
         value: Math.max(0, Number(x.amount) || 0),
       })),
-      resPos.indent + "  ",
+      block.indent + "  ",
     );
-    const newText =
-      text.slice(0, resPos.keyStart) +
-      `${resPos.indent}resources: {${newInnerBlock}}` +
-      (resPos.hadTrailingComma ? "," : "") +
-      text.slice(resPos.braceEnd + (resPos.hadTrailingComma ? 2 : 1));
+    const insertion = `\n${block.indent}  resources: {${newInnerBlock}},\n${block.indent}`;
+    const newInner = innerOld.replace(/\s*$/, "") + insertion;
+    const newText = replaceBlock(text, block, newInner);
     await writeEs3(filePath, newText);
     return { ok: true, backupPath, fallback: true };
   }
+  const newInnerBlock = buildNumericObjectBlock(
+    resources.map((x) => ({
+      id: x.id,
+      value: Math.max(0, Number(x.amount) || 0),
+    })),
+    resPos.indent + "  ",
+  );
+  const newText =
+    text.slice(0, resPos.keyStart) +
+    `${resPos.indent}resources: {${newInnerBlock}}` +
+    (resPos.hadTrailingComma ? "," : "") +
+    text.slice(resPos.braceEnd + (resPos.hadTrailingComma ? 2 : 1));
+  await writeEs3(filePath, newText);
+  return { ok: true, backupPath };
 }
 
 // -----------------------------
@@ -718,57 +690,43 @@ export async function writeSaveCars(
   const backup = await createSaveBackup(filePath).catch(() => null);
   const backupPath = backup?.backupPath;
   const { text } = await readEs3(filePath);
-  try {
-    const obj = parseLooseJson(text);
-    if (!obj?.CITY?.value) throw new Error("Missing CITY.value");
-    const r: Record<string, boolean> = {
-      ...(obj.CITY.value.unlockedCars || {}),
-    };
-    for (const { id, unlocked } of cars) {
-      r[String(id)] = Boolean(unlocked);
-    }
-    obj.CITY.value.unlockedCars = r;
-    const out = stringifyWithUnquotedNumericKeys(obj);
-    await writeEs3(filePath, out);
-    return { ok: true, backupPath };
-  } catch {
-    const valuePos = findPathBlock(text, ["CITY", "value"]) ?? {
-      start: 0,
-      end: text.length,
-      indent: "",
-    };
-    const carPos = findFirstBlock(
-      text,
-      "unlockedCars",
-      valuePos.start,
-      valuePos.end + 1,
-    );
-    if (!carPos) {
-      const block = valuePos;
-      if (!block) return { ok: false, backupPath, fallback: true };
-      const innerOld = extractBlockInner(text, block);
-      const newInnerBlock = buildBooleanObjectBlock(
-        cars.map((x) => ({ id: x.id, value: Boolean(x.unlocked) })),
-        block.indent + "  ",
-      );
-      const insertion = `\n${block.indent}  unlockedCars: {${newInnerBlock}},\n${block.indent}`;
-      const newInner = innerOld.replace(/\s*$/, "") + insertion;
-      const newText = replaceBlock(text, block, newInner);
-      await writeEs3(filePath, newText);
-      return { ok: true, backupPath, fallback: true };
-    }
+  // Always use regex-based patching to preserve the game's non-standard JSON format.
+  const valuePos = findPathBlock(text, ["CITY", "value"]) ?? {
+    start: 0,
+    end: text.length,
+    indent: "",
+  };
+  const carPos = findFirstBlock(
+    text,
+    "unlockedCars",
+    valuePos.start,
+    valuePos.end + 1,
+  );
+  if (!carPos) {
+    const block = valuePos;
+    if (!block) return { ok: false, backupPath, fallback: true };
+    const innerOld = extractBlockInner(text, block);
     const newInnerBlock = buildBooleanObjectBlock(
       cars.map((x) => ({ id: x.id, value: Boolean(x.unlocked) })),
-      carPos.indent + "  ",
+      block.indent + "  ",
     );
-    const newText =
-      text.slice(0, carPos.keyStart) +
-      `${carPos.indent}unlockedCars: {${newInnerBlock}}` +
-      (carPos.hadTrailingComma ? "," : "") +
-      text.slice(carPos.braceEnd + (carPos.hadTrailingComma ? 2 : 1));
+    const insertion = `\n${block.indent}  unlockedCars: {${newInnerBlock}},\n${block.indent}`;
+    const newInner = innerOld.replace(/\s*$/, "") + insertion;
+    const newText = replaceBlock(text, block, newInner);
     await writeEs3(filePath, newText);
     return { ok: true, backupPath, fallback: true };
   }
+  const newInnerBlock = buildBooleanObjectBlock(
+    cars.map((x) => ({ id: x.id, value: Boolean(x.unlocked) })),
+    carPos.indent + "  ",
+  );
+  const newText =
+    text.slice(0, carPos.keyStart) +
+    `${carPos.indent}unlockedCars: {${newInnerBlock}}` +
+    (carPos.hadTrailingComma ? "," : "") +
+    text.slice(carPos.braceEnd + (carPos.hadTrailingComma ? 2 : 1));
+  await writeEs3(filePath, newText);
+  return { ok: true, backupPath };
 }
 
 // -----------------------------
@@ -794,156 +752,118 @@ export async function patchSaveScalars(
   const backup = await createSaveBackup(filePath).catch(() => null);
   const backupPath = backup?.backupPath;
   const { text } = await readEs3(filePath);
-  try {
-    const obj = parseLooseJson(text);
-    const value = obj?.CITY?.value;
-    if (!value) throw new Error("Missing CITY.value");
+  // Always use regex-based patching to preserve the game's non-standard JSON format.
+  const valueBlock = findPathBlock(text, ["CITY", "value"]) ?? {
+    start: 0,
+    end: text.length,
+    indent: "",
+  };
+  const inner = extractBlockInner(text, valueBlock);
 
-    // Apply patch with business rules
-    if (typeof patch.name === "string") value.name = patch.name;
-    if (typeof patch.money === "number") value.money = patch.money;
-    if (typeof patch.researchPoints === "number")
-      value.researchPoints = patch.researchPoints;
-    if (typeof patch.day === "number") value.day = patch.day;
-    if (typeof patch.dayProgress === "number")
-      value.dayProgress = patch.dayProgress;
-    if (typeof patch.difficulty === "number")
-      value.difficulty = patch.difficulty;
-    if (typeof patch.level === "number") value.level = patch.level;
+  let innerNew = inner;
+  const indentBase = valueBlock.indent + "  ";
 
-    if (typeof patch.mapSize === "number") {
-      const newVal = clamp(patch.mapSize, 40, 88);
-      const cur = safeNumber(value.mapSize, newVal);
-      value.mapSize = Math.max(cur, newVal);
-    }
+  const readBool = (key: string) => {
+    const v = getScalarInBlock(innerNew, key);
+    if (v == null) return null;
+    return /true/.test(v) ? true : /false/.test(v) ? false : null;
+  };
+  const readNum = (key: string) => {
+    const v = getScalarInBlock(innerNew, key);
+    if (v == null) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
 
-    if (typeof patch.sandbox === "boolean") {
-      const isSurvival = Boolean(value.isSurvivalMode);
-      if (!isSurvival) {
-        value.unlockAll = patch.sandbox;
-        value.infiniteMoney = patch.sandbox;
-        value.maxLevel = patch.sandbox;
-      }
-      // In Survival: ignore silently
-    }
-
-    const out = stringifyWithUnquotedNumericKeys(obj);
-    await writeEs3(filePath, out);
-    return { ok: true, backupPath };
-  } catch {
-    // Fallback via regex setters
-    const valueBlock = findPathBlock(text, ["CITY", "value"]) ?? {
-      start: 0,
-      end: text.length,
-      indent: "",
-    };
-    const inner = extractBlockInner(text, valueBlock);
-
-    let innerNew = inner;
-    const indentBase = valueBlock.indent + "  ";
-
-    const readBool = (key: string) => {
-      const v = getScalarInBlock(innerNew, key);
-      if (v == null) return null;
-      return /true/.test(v) ? true : /false/.test(v) ? false : null;
-    };
-    const readNum = (key: string) => {
-      const v = getScalarInBlock(innerNew, key);
-      if (v == null) return null;
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    };
-
-    if (typeof patch.name === "string") {
-      const escaped = JSON.stringify(patch.name);
-      innerNew = setScalarInBlock(innerNew, "name", escaped, valueBlock.indent);
-    }
-    if (typeof patch.money === "number") {
-      innerNew = setScalarInBlock(
-        innerNew,
-        "money",
-        String(patch.money),
-        valueBlock.indent,
-      );
-    }
-    if (typeof patch.researchPoints === "number") {
-      innerNew = setScalarInBlock(
-        innerNew,
-        "researchPoints",
-        String(patch.researchPoints),
-        valueBlock.indent,
-      );
-    }
-    if (typeof patch.day === "number") {
-      innerNew = setScalarInBlock(
-        innerNew,
-        "day",
-        String(patch.day),
-        valueBlock.indent,
-      );
-    }
-    if (typeof patch.dayProgress === "number") {
-      innerNew = setScalarInBlock(
-        innerNew,
-        "dayProgress",
-        String(patch.dayProgress),
-        valueBlock.indent,
-      );
-    }
-    if (typeof patch.difficulty === "number") {
-      innerNew = setScalarInBlock(
-        innerNew,
-        "difficulty",
-        String(patch.difficulty),
-        valueBlock.indent,
-      );
-    }
-    if (typeof patch.level === "number") {
-      innerNew = setScalarInBlock(
-        innerNew,
-        "level",
-        String(patch.level),
-        valueBlock.indent,
-      );
-    }
-    if (typeof patch.mapSize === "number") {
-      const cur = readNum("mapSize") ?? 40;
-      const eff = Math.max(cur, clamp(patch.mapSize, 40, 88));
-      innerNew = setScalarInBlock(
-        innerNew,
-        "mapSize",
-        String(eff),
-        valueBlock.indent,
-      );
-    }
-    if (typeof patch.sandbox === "boolean") {
-      const isSurvival = readBool("isSurvivalMode") ?? false;
-      if (!isSurvival) {
-        innerNew = setScalarInBlock(
-          innerNew,
-          "unlockAll",
-          patch.sandbox ? "true" : "false",
-          valueBlock.indent,
-        );
-        innerNew = setScalarInBlock(
-          innerNew,
-          "infiniteMoney",
-          patch.sandbox ? "true" : "false",
-          valueBlock.indent,
-        );
-        innerNew = setScalarInBlock(
-          innerNew,
-          "maxLevel",
-          patch.sandbox ? "true" : "false",
-          valueBlock.indent,
-        );
-      }
-    }
-
-    const newText = replaceBlock(text, valueBlock, innerNew);
-    await writeEs3(filePath, newText);
-    return { ok: true, backupPath, fallback: true };
+  if (typeof patch.name === "string") {
+    const escaped = JSON.stringify(patch.name);
+    innerNew = setScalarInBlock(innerNew, "name", escaped, valueBlock.indent);
   }
+  if (typeof patch.money === "number") {
+    innerNew = setScalarInBlock(
+      innerNew,
+      "money",
+      String(patch.money),
+      valueBlock.indent,
+    );
+  }
+  if (typeof patch.researchPoints === "number") {
+    innerNew = setScalarInBlock(
+      innerNew,
+      "researchPoints",
+      String(patch.researchPoints),
+      valueBlock.indent,
+    );
+  }
+  if (typeof patch.day === "number") {
+    innerNew = setScalarInBlock(
+      innerNew,
+      "day",
+      String(patch.day),
+      valueBlock.indent,
+    );
+  }
+  if (typeof patch.dayProgress === "number") {
+    innerNew = setScalarInBlock(
+      innerNew,
+      "dayProgress",
+      String(patch.dayProgress),
+      valueBlock.indent,
+    );
+  }
+  if (typeof patch.difficulty === "number") {
+    innerNew = setScalarInBlock(
+      innerNew,
+      "difficulty",
+      String(patch.difficulty),
+      valueBlock.indent,
+    );
+  }
+  if (typeof patch.level === "number") {
+    innerNew = setScalarInBlock(
+      innerNew,
+      "level",
+      String(patch.level),
+      valueBlock.indent,
+    );
+  }
+  if (typeof patch.mapSize === "number") {
+    const cur = readNum("mapSize") ?? 40;
+    const eff = Math.max(cur, clamp(patch.mapSize, 40, 88));
+    innerNew = setScalarInBlock(
+      innerNew,
+      "mapSize",
+      String(eff),
+      valueBlock.indent,
+    );
+  }
+  if (typeof patch.sandbox === "boolean") {
+    const isSurvival = readBool("isSurvivalMode") ?? false;
+    if (!isSurvival) {
+      innerNew = setScalarInBlock(
+        innerNew,
+        "unlockAll",
+        patch.sandbox ? "true" : "false",
+        valueBlock.indent,
+      );
+      innerNew = setScalarInBlock(
+        innerNew,
+        "infiniteMoney",
+        patch.sandbox ? "true" : "false",
+        valueBlock.indent,
+      );
+      innerNew = setScalarInBlock(
+        innerNew,
+        "maxLevel",
+        patch.sandbox ? "true" : "false",
+        valueBlock.indent,
+      );
+    }
+  }
+
+  const newText = replaceBlock(text, valueBlock, innerNew);
+  await writeEs3(filePath, newText);
+  return { ok: true, backupPath };
 }
 
 // -----------------------------
@@ -1327,13 +1247,15 @@ export async function scanAllSaves(startDirs: string[]): Promise<
 // 7) Backups (saves + globals)
 // -----------------------------
 
-export async function createSaveBackup(
-  filePath: string,
-): Promise<{ backupPath: string }> {
-  const dir = path.dirname(filePath);
-  const base = path.basename(filePath);
-  const backupDir = path.join(dir, ".backups", base);
-  await ensureDir(backupDir);
+/** Quick extraction of FILE_ID from raw ES3 text via regex (avoids full parse). */
+function extractFileId(text: string): string {
+  const m =
+    text.match(/FILE_ID\s*:\s*"([^"]*)"/) ??
+    text.match(/FILE_ID\s*:\s*([^,\s}]+)/);
+  return m ? m[1].trim() : "";
+}
+
+function buildTimestamp(): string {
   const ts = new Date();
   const yyyy = ts.getFullYear();
   const mm = String(ts.getMonth() + 1).padStart(2, "0");
@@ -1341,13 +1263,70 @@ export async function createSaveBackup(
   const hh = String(ts.getHours()).padStart(2, "0");
   const mi = String(ts.getMinutes()).padStart(2, "0");
   const ss = String(ts.getSeconds()).padStart(2, "0");
-  const name = `${yyyy}-${mm}-${dd}_${hh}-${mi}-${ss}.es3`;
-  const backupPath = path.join(backupDir, name);
+  return `${yyyy}-${mm}-${dd}_${hh}-${mi}-${ss}`;
+}
+
+/**
+ * Backup structure: .backups/<FILE_ID>/<timestamp>/<original_filename>
+ * The original .es3 file is copied as-is — no modifications to the gzip contents.
+ */
+export async function createSaveBackup(
+  filePath: string,
+): Promise<{ backupPath: string }> {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+
+  // Read FILE_ID from the save to use as the backup folder ID
+  let fileId = "";
+  try {
+    const { text } = await readEs3(filePath);
+    fileId = extractFileId(text);
+  } catch {
+    /* ignore */
+  }
+  // Fallback to filename (without extension) if FILE_ID not found
+  if (!fileId) {
+    const ext = path.extname(base);
+    fileId = ext ? base.slice(0, -ext.length) : base;
+  }
+
+  const timestamp = buildTimestamp();
+  const backupDir = path.join(dir, ".backups", fileId, timestamp);
+  await ensureDir(backupDir);
+
+  const backupPath = path.join(backupDir, base);
   await fs.copyFile(filePath, backupPath);
   return { backupPath };
 }
 
-export async function rotateBackups(
+/**
+ * Rotate backups: keeps the `keep` most recent timestamp folders inside `idDir`.
+ * Each timestamp folder (e.g. 2026-02-17_14-30-00) is treated as one backup unit.
+ */
+export async function rotateBackups(idDir: string, keep = 20): Promise<void> {
+  let entries: fscb.Dirent[];
+  try {
+    entries = await fs.readdir(idDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const dirs = entries.filter((e) => e.isDirectory());
+  const stats = await Promise.all(
+    dirs.map(async (e) => {
+      const full = path.join(idDir, e.name);
+      const st = await fs.stat(full);
+      return { name: e.name, full, mtimeMs: st.mtimeMs };
+    }),
+  );
+  stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const toDelete = stats.slice(keep);
+  for (const d of toDelete) {
+    await fs.rm(d.full, { recursive: true, force: true }).catch(() => void 0);
+  }
+}
+
+/** Rotate flat file backups (used for global settings .gz files). */
+async function rotateGlobalBackups(
   backupDir: string,
   keep = 20,
 ): Promise<void> {
@@ -1370,6 +1349,11 @@ export async function rotateBackups(
   await Promise.all(toDelete.map((f) => fs.unlink(f.full).catch(() => void 0)));
 }
 
+/**
+ * Lists all backups for a given save file.
+ * Walks .backups/<ID>/<timestamp>/<file> structure.
+ * Also supports legacy flat layout (.backups/<file>/<backup.es3>) for backwards compat.
+ */
 export async function listSaveBackups(
   filePath: string,
 ): Promise<
@@ -1377,27 +1361,69 @@ export async function listSaveBackups(
 > {
   const dir = path.dirname(filePath);
   const base = path.basename(filePath);
-  const backupDir = path.join(dir, ".backups", base);
-  let entries: fscb.Dirent[];
+  const backupsRoot = path.join(dir, ".backups");
+
+  // Read FILE_ID to find the correct backup folder
+  let fileId = "";
   try {
-    entries = await fs.readdir(backupDir, { withFileTypes: true });
+    const { text } = await readEs3(filePath);
+    fileId = extractFileId(text);
   } catch {
-    return [];
+    /* ignore */
   }
-  const items = await Promise.all(
-    entries
-      .filter((e) => e.isFile())
-      .map(async (e) => {
-        const full = path.join(backupDir, e.name);
-        const st = await fs.stat(full);
-        return {
-          name: e.name,
-          backupPath: full,
-          sizeBytes: st.size,
-          mtime: st.mtimeMs ?? st.mtime.getTime(),
-        };
-      }),
-  );
+
+  const items: Array<{
+    name: string;
+    backupPath: string;
+    sizeBytes: number;
+    mtime: number;
+  }> = [];
+
+  // New structure: .backups/<ID>/<timestamp>/<file>
+  if (fileId) {
+    const idDir = path.join(backupsRoot, fileId);
+    try {
+      const tsDirs = await fs.readdir(idDir, { withFileTypes: true });
+      for (const tsDir of tsDirs) {
+        if (!tsDir.isDirectory()) continue;
+        const tsPath = path.join(idDir, tsDir.name);
+        const files = await fs.readdir(tsPath, { withFileTypes: true });
+        for (const f of files) {
+          if (!f.isFile()) continue;
+          const full = path.join(tsPath, f.name);
+          const st = await fs.stat(full);
+          items.push({
+            name: f.name,
+            backupPath: full,
+            sizeBytes: st.size,
+            mtime: st.mtimeMs ?? st.mtime.getTime(),
+          });
+        }
+      }
+    } catch {
+      /* no backups yet */
+    }
+  }
+
+  // Legacy fallback: .backups/<filename>/<backup_files>
+  const legacyDir = path.join(backupsRoot, base);
+  try {
+    const legacyEntries = await fs.readdir(legacyDir, { withFileTypes: true });
+    for (const e of legacyEntries) {
+      if (!e.isFile()) continue;
+      const full = path.join(legacyDir, e.name);
+      const st = await fs.stat(full);
+      items.push({
+        name: e.name,
+        backupPath: full,
+        sizeBytes: st.size,
+        mtime: st.mtimeMs ?? st.mtime.getTime(),
+      });
+    }
+  } catch {
+    /* no legacy backups */
+  }
+
   items.sort((a, b) => b.mtime - a.mtime);
   return items;
 }
@@ -1579,14 +1605,7 @@ export async function writeGlobalSettings(
 
   // Create backup (.gz) before writing
   const backupDir = await createGlobalBackupDir(dataDir);
-  const ts = new Date();
-  const yyyy = ts.getFullYear();
-  const mm = String(ts.getMonth() + 1).padStart(2, "0");
-  const dd = String(ts.getDate()).padStart(2, "0");
-  const hh = String(ts.getHours()).padStart(2, "0");
-  const mi = String(ts.getMinutes()).padStart(2, "0");
-  const ss = String(ts.getSeconds()).padStart(2, "0");
-  const backupName = `${yyyy}-${mm}-${dd}_${hh}-${mi}-${ss}.gz`;
+  const backupName = `${buildTimestamp()}.gz`;
   const backupPath = path.join(backupDir, backupName);
   try {
     const cur = await fs.readFile(filePath);
@@ -1601,8 +1620,8 @@ export async function writeGlobalSettings(
   } as any);
   await fs.writeFile(filePath, gz);
 
-  // Rotate global backups (keep last 20)
-  await rotateBackups(backupDir, 20);
+  // Rotate global backups (keep last 20) — flat file rotation
+  await rotateGlobalBackups(backupDir, 20);
 
   return { ok: true, filePath, backupPath };
 }
@@ -1613,14 +1632,7 @@ export async function deleteGlobalSettings(
   const filePath = path.join(dataDir, "survival_global_settings");
   const backupDir = await createGlobalBackupDir(dataDir);
   // Backup current .gz before deletion
-  const ts = new Date();
-  const yyyy = ts.getFullYear();
-  const mm = String(ts.getMonth() + 1).padStart(2, "0");
-  const dd = String(ts.getDate()).padStart(2, "0");
-  const hh = String(ts.getHours()).padStart(2, "0");
-  const mi = String(ts.getMinutes()).padStart(2, "0");
-  const ss = String(ts.getSeconds()).padStart(2, "0");
-  const backupName = `${yyyy}-${mm}-${dd}_${hh}-${mi}-${ss}.gz`;
+  const backupName = `${buildTimestamp()}.gz`;
   const backupPath = path.join(backupDir, backupName);
   try {
     const cur = await fs.readFile(filePath);
@@ -1642,256 +1654,195 @@ export async function writeSaveFromPatch(
 ): Promise<{ ok: boolean; backupPath?: string; fallback?: boolean }> {
   const { backupPath } = await createSaveBackup(filePath);
   const { text } = await readEs3(filePath);
-  // Try strict parse first
-  try {
-    const obj = parseLooseJson(text);
-    const value = obj?.CITY?.value;
-    if (!value) throw new Error("Missing CITY.value");
+  // Always use regex-based patching to preserve the game's non-standard JSON format.
+  // The game uses composite object keys (e.g. {Item1:56,Item2:54}:value) that
+  // JSON.stringify cannot represent — re-serializing would corrupt the save file.
+  const valueBlock = findPathBlock(text, ["CITY", "value"]) ?? {
+    start: 0,
+    end: text.length,
+    indent: "",
+  };
+  let inner = extractBlockInner(text, valueBlock);
+  const indent = valueBlock.indent;
+  const readBool = (key: string) =>
+    /true/.test(getScalarInBlock(inner, key) ?? "false");
+  const readNum = (key: string) => {
+    const v = getScalarInBlock(inner, key);
+    const n = v == null ? NaN : Number(v);
+    return Number.isFinite(n) ? n : NaN;
+  };
 
-    // Scalars
-    if (typeof patch.name === "string") value.name = patch.name;
-    if (typeof patch.money === "number") value.money = patch.money;
-    if (typeof patch.researchPoints === "number")
-      value.researchPoints = patch.researchPoints;
-    if (typeof patch.day === "number") value.day = patch.day;
-    if (typeof patch.dayProgress === "number")
-      value.dayProgress = patch.dayProgress;
-    if (typeof patch.difficulty === "number")
-      value.difficulty = patch.difficulty;
-    if (typeof patch.level === "number") value.level = patch.level;
-
-    if (typeof patch.mapSize === "number") {
-      const newVal = clamp(patch.mapSize, 40, 88);
-      const cur = safeNumber(value.mapSize, newVal);
-      value.mapSize = Math.max(cur, newVal);
-    }
-
-    if (typeof patch.sandbox === "boolean") {
-      const isSurvival = Boolean(value.isSurvivalMode);
-      if (!isSurvival) {
-        value.unlockAll = patch.sandbox;
-        value.infiniteMoney = patch.sandbox;
-        value.maxLevel = patch.sandbox;
-      }
-    }
-
-    // Collections
-    if (patch.resources) {
-      const objRes: Record<string, number> = { ...(value.resources || {}) };
-      for (const r of patch.resources)
-        objRes[String(r.id)] = Math.max(0, Number(r.amount) || 0);
-      value.resources = objRes;
-    }
-    if (patch.relationships) {
-      const objRel: Record<string, number> = { ...(value.relationships || {}) };
-      for (const r of patch.relationships)
-        objRel[String(r.id)] = Number(r.level) || 0;
-      value.relationships = objRel;
-    }
-    if (patch.unlockedCars) {
-      const objCar: Record<string, boolean> = { ...(value.unlockedCars || {}) };
-      for (const c of patch.unlockedCars)
-        objCar[String(c.id)] = Boolean(c.unlocked);
-      value.unlockedCars = objCar;
-    }
-
-    const out = stringifyWithUnquotedNumericKeys(obj);
-    await writeEs3(filePath, out);
-    // Rotate backups
-    await rotateBackups(
-      path.join(path.dirname(filePath), ".backups", path.basename(filePath)),
-      20,
+  if (typeof patch.name === "string")
+    inner = setScalarInBlock(inner, "name", JSON.stringify(patch.name), indent);
+  if (typeof patch.money === "number")
+    inner = setScalarInBlock(inner, "money", String(patch.money), indent);
+  if (typeof patch.researchPoints === "number")
+    inner = setScalarInBlock(
+      inner,
+      "researchPoints",
+      String(patch.researchPoints),
+      indent,
     );
-    return { ok: true, backupPath };
-  } catch {
-    // Fallback: regex setters
-    const valueBlock = findPathBlock(text, ["CITY", "value"]) ?? {
+  if (typeof patch.day === "number")
+    inner = setScalarInBlock(inner, "day", String(patch.day), indent);
+  if (typeof patch.dayProgress === "number")
+    inner = setScalarInBlock(
+      inner,
+      "dayProgress",
+      String(patch.dayProgress),
+      indent,
+    );
+  if (typeof patch.difficulty === "number")
+    inner = setScalarInBlock(
+      inner,
+      "difficulty",
+      String(patch.difficulty),
+      indent,
+    );
+  if (typeof patch.level === "number")
+    inner = setScalarInBlock(inner, "level", String(patch.level), indent);
+
+  if (typeof patch.mapSize === "number") {
+    const cur = readNum("mapSize");
+    const eff = Math.max(
+      Number.isFinite(cur) ? cur : 40,
+      clamp(patch.mapSize, 40, 88),
+    );
+    inner = setScalarInBlock(inner, "mapSize", String(eff), indent);
+  }
+  if (typeof patch.sandbox === "boolean") {
+    const isSurvival = readBool("isSurvivalMode");
+    if (!isSurvival) {
+      inner = setScalarInBlock(
+        inner,
+        "unlockAll",
+        patch.sandbox ? "true" : "false",
+        indent,
+      );
+      inner = setScalarInBlock(
+        inner,
+        "infiniteMoney",
+        patch.sandbox ? "true" : "false",
+        indent,
+      );
+      inner = setScalarInBlock(
+        inner,
+        "maxLevel",
+        patch.sandbox ? "true" : "false",
+        indent,
+      );
+    }
+  }
+
+  // Rebuild collections if provided
+  const fullTextBefore = text;
+  let newText = replaceBlock(fullTextBefore, valueBlock, inner);
+
+  const rebuildNumericBlock = (
+    key: string,
+    entries: Array<{ id: number; value: number }>,
+  ) => {
+    const newValueBlock = findPathBlock(newText, ["CITY", "value"]) ?? {
       start: 0,
-      end: text.length,
+      end: newText.length,
       indent: "",
     };
-    let inner = extractBlockInner(text, valueBlock);
-    const indent = valueBlock.indent;
-    const readBool = (key: string) =>
-      /true/.test(getScalarInBlock(inner, key) ?? "false");
-    const readNum = (key: string) => {
-      const v = getScalarInBlock(inner, key);
-      const n = v == null ? NaN : Number(v);
-      return Number.isFinite(n) ? n : NaN;
-    };
-
-    if (typeof patch.name === "string")
-      inner = setScalarInBlock(
-        inner,
-        "name",
-        JSON.stringify(patch.name),
-        indent,
-      );
-    if (typeof patch.money === "number")
-      inner = setScalarInBlock(inner, "money", String(patch.money), indent);
-    if (typeof patch.researchPoints === "number")
-      inner = setScalarInBlock(
-        inner,
-        "researchPoints",
-        String(patch.researchPoints),
-        indent,
-      );
-    if (typeof patch.day === "number")
-      inner = setScalarInBlock(inner, "day", String(patch.day), indent);
-    if (typeof patch.dayProgress === "number")
-      inner = setScalarInBlock(
-        inner,
-        "dayProgress",
-        String(patch.dayProgress),
-        indent,
-      );
-    if (typeof patch.difficulty === "number")
-      inner = setScalarInBlock(
-        inner,
-        "difficulty",
-        String(patch.difficulty),
-        indent,
-      );
-    if (typeof patch.level === "number")
-      inner = setScalarInBlock(inner, "level", String(patch.level), indent);
-
-    if (typeof patch.mapSize === "number") {
-      const cur = readNum("mapSize");
-      const eff = Math.max(
-        Number.isFinite(cur) ? cur : 40,
-        clamp(patch.mapSize, 40, 88),
-      );
-      inner = setScalarInBlock(inner, "mapSize", String(eff), indent);
-    }
-    if (typeof patch.sandbox === "boolean") {
-      const isSurvival = readBool("isSurvivalMode");
-      if (!isSurvival) {
-        inner = setScalarInBlock(
-          inner,
-          "unlockAll",
-          patch.sandbox ? "true" : "false",
-          indent,
-        );
-        inner = setScalarInBlock(
-          inner,
-          "infiniteMoney",
-          patch.sandbox ? "true" : "false",
-          indent,
-        );
-        inner = setScalarInBlock(
-          inner,
-          "maxLevel",
-          patch.sandbox ? "true" : "false",
-          indent,
-        );
-      }
-    }
-
-    // Rebuild collections if provided
-    const fullTextBefore = text;
-    let newText = replaceBlock(fullTextBefore, valueBlock, inner);
-
-    const rebuildNumericBlock = (
-      key: string,
-      entries: Array<{ id: number; value: number }>,
-    ) => {
-      const newValueBlock = findPathBlock(newText, ["CITY", "value"]) ?? {
-        start: 0,
-        end: newText.length,
-        indent: "",
-      };
-      const blk = findFirstBlock(
-        newText,
-        key,
-        newValueBlock.start,
-        newValueBlock.end + 1,
-      );
-      if (blk) {
-        const newInnerBlock = buildNumericObjectBlock(
-          entries,
-          blk.indent + "  ",
-        );
-        newText =
-          newText.slice(0, blk.keyStart) +
-          `${blk.indent}${key}: {${newInnerBlock}}` +
-          (blk.hadTrailingComma ? "," : "") +
-          newText.slice(blk.braceEnd + (blk.hadTrailingComma ? 2 : 1));
-      } else {
-        // Insert
-        const vb = newValueBlock;
-        const valInner = extractBlockInner(newText, vb);
-        const insertion = `\n${vb.indent}  ${key}: {${buildNumericObjectBlock(entries, vb.indent + "  ")}},\n${vb.indent}`;
-        const replaced = valInner.replace(/\s*$/, "") + insertion;
-        newText = replaceBlock(newText, vb, replaced);
-      }
-    };
-    const rebuildBooleanBlock = (
-      key: string,
-      entries: Array<{ id: number; value: boolean }>,
-    ) => {
-      const newValueBlock = findPathBlock(newText, ["CITY", "value"]) ?? {
-        start: 0,
-        end: newText.length,
-        indent: "",
-      };
-      const blk = findFirstBlock(
-        newText,
-        key,
-        newValueBlock.start,
-        newValueBlock.end + 1,
-      );
-      if (blk) {
-        const newInnerBlock = buildBooleanObjectBlock(
-          entries,
-          blk.indent + "  ",
-        );
-        newText =
-          newText.slice(0, blk.keyStart) +
-          `${blk.indent}${key}: {${newInnerBlock}}` +
-          (blk.hadTrailingComma ? "," : "") +
-          newText.slice(blk.braceEnd + (blk.hadTrailingComma ? 2 : 1));
-      } else {
-        const vb = newValueBlock;
-        const valInner = extractBlockInner(newText, vb);
-        const insertion = `\n${vb.indent}  ${key}: {${buildBooleanObjectBlock(entries, vb.indent + "  ")}},\n${vb.indent}`;
-        const replaced = valInner.replace(/\s*$/, "") + insertion;
-        newText = replaceBlock(newText, vb, replaced);
-      }
-    };
-
-    if (patch.resources) {
-      rebuildNumericBlock(
-        "resources",
-        patch.resources.map((r) => ({
-          id: r.id,
-          value: Math.max(0, Number(r.amount) || 0),
-        })),
-      );
-    }
-    if (patch.relationships) {
-      rebuildNumericBlock(
-        "relationships",
-        patch.relationships.map((r) => ({
-          id: r.id,
-          value: Number(r.level) || 0,
-        })),
-      );
-    }
-    if (patch.unlockedCars) {
-      rebuildBooleanBlock(
-        "unlockedCars",
-        patch.unlockedCars.map((c) => ({
-          id: c.id,
-          value: Boolean(c.unlocked),
-        })),
-      );
-    }
-
-    await writeEs3(filePath, newText);
-    await rotateBackups(
-      path.join(path.dirname(filePath), ".backups", path.basename(filePath)),
-      20,
+    const blk = findFirstBlock(
+      newText,
+      key,
+      newValueBlock.start,
+      newValueBlock.end + 1,
     );
-    return { ok: true, backupPath, fallback: true };
+    if (blk) {
+      const newInnerBlock = buildNumericObjectBlock(entries, blk.indent + "  ");
+      newText =
+        newText.slice(0, blk.keyStart) +
+        `${blk.indent}${key}: {${newInnerBlock}}` +
+        (blk.hadTrailingComma ? "," : "") +
+        newText.slice(blk.braceEnd + (blk.hadTrailingComma ? 2 : 1));
+    } else {
+      // Insert
+      const vb = newValueBlock;
+      const valInner = extractBlockInner(newText, vb);
+      const insertion = `\n${vb.indent}  ${key}: {${buildNumericObjectBlock(entries, vb.indent + "  ")}},\n${vb.indent}`;
+      const replaced = valInner.replace(/\s*$/, "") + insertion;
+      newText = replaceBlock(newText, vb, replaced);
+    }
+  };
+  const rebuildBooleanBlock = (
+    key: string,
+    entries: Array<{ id: number; value: boolean }>,
+  ) => {
+    const newValueBlock = findPathBlock(newText, ["CITY", "value"]) ?? {
+      start: 0,
+      end: newText.length,
+      indent: "",
+    };
+    const blk = findFirstBlock(
+      newText,
+      key,
+      newValueBlock.start,
+      newValueBlock.end + 1,
+    );
+    if (blk) {
+      const newInnerBlock = buildBooleanObjectBlock(entries, blk.indent + "  ");
+      newText =
+        newText.slice(0, blk.keyStart) +
+        `${blk.indent}${key}: {${newInnerBlock}}` +
+        (blk.hadTrailingComma ? "," : "") +
+        newText.slice(blk.braceEnd + (blk.hadTrailingComma ? 2 : 1));
+    } else {
+      const vb = newValueBlock;
+      const valInner = extractBlockInner(newText, vb);
+      const insertion = `\n${vb.indent}  ${key}: {${buildBooleanObjectBlock(entries, vb.indent + "  ")}},\n${vb.indent}`;
+      const replaced = valInner.replace(/\s*$/, "") + insertion;
+      newText = replaceBlock(newText, vb, replaced);
+    }
+  };
+
+  if (patch.resources) {
+    rebuildNumericBlock(
+      "resources",
+      patch.resources.map((r) => ({
+        id: r.id,
+        value: Math.max(0, Number(r.amount) || 0),
+      })),
+    );
   }
+  if (patch.relationships) {
+    rebuildNumericBlock(
+      "relationships",
+      patch.relationships.map((r) => ({
+        id: r.id,
+        value: Number(r.level) || 0,
+      })),
+    );
+  }
+  if (patch.unlockedCars) {
+    rebuildBooleanBlock(
+      "unlockedCars",
+      patch.unlockedCars.map((c) => ({
+        id: c.id,
+        value: Boolean(c.unlocked),
+      })),
+    );
+  }
+
+  await writeEs3(filePath, newText);
+
+  // Rotate backups using the FILE_ID-based folder
+  const fileId = extractFileId(text);
+  const idForBackup =
+    fileId ||
+    (() => {
+      const ext = path.extname(path.basename(filePath));
+      return ext
+        ? path.basename(filePath).slice(0, -ext.length)
+        : path.basename(filePath);
+    })();
+  await rotateBackups(
+    path.join(path.dirname(filePath), ".backups", idForBackup),
+    20,
+  );
+  return { ok: true, backupPath };
 }

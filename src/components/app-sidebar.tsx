@@ -1,5 +1,15 @@
 import { Link, useLocation } from "react-router-dom";
-import { Database, Gamepad2, Home, Save, Settings, Wrench } from "lucide-react";
+import {
+  Database,
+  Gamepad2,
+  History,
+  Home,
+  Save,
+  Settings,
+  Wrench,
+} from "lucide-react";
+
+import { VERSION_DISPLAY } from "@/lib/version";
 
 import { TeamSwitcher } from "@/components/team-switcher";
 import { LocaleSwitcher } from "@/components/locale-switcher";
@@ -61,6 +71,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       items: [
         { title: t("sidebar.backups"), href: "/backups", icon: Database },
         { title: t("sidebar.settings"), href: "/settings", icon: Settings },
+        { title: t("sidebar.changelog"), href: "/changelog", icon: History },
       ],
     },
   ];
@@ -96,6 +107,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       </SidebarContent>
       <SidebarFooter>
         <LocaleSwitcher />
+        <Link
+          to="/changelog"
+          className="px-3 py-1 text-center text-[10px] font-mono text-muted-foreground/60 hover:text-muted-foreground transition-colors">
+          v{VERSION_DISPLAY}
+        </Link>
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

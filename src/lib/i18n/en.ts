@@ -289,4 +289,13 @@ export const en: Record<string, string> = {
 
   // Save details title
   "page.saveDetails.title": "Save Details",
+
+  // Changelog
+  "sidebar.changelog": "Changelog",
+  "page.changelog.title": "Changelog",
+  "page.changelog.description": "Version history and release notes",
+  "changelog.currentVersion": "Current Version",
+  "changelog.runningVersion": "You are running this version",
+  "changelog.history": "Release History",
+  "changelog.latest": "Latest",
 };

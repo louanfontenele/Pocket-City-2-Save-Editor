@@ -16,6 +16,7 @@ import { SaveDetailPage } from "./pages/save-detail";
 import { BackupsPage } from "./pages/backups";
 import { SettingsPage } from "./pages/settings";
 import { SurvivalGlobalConfigPage } from "./pages/survival-global-config";
+import { ChangelogPage } from "./pages/changelog";
 
 function getInitialLocale(): "en" | "pt-br" {
   try {
@@ -40,6 +41,7 @@ createRoot(document.getElementById("root")!).render(
               path="survival-global-config"
               element={<SurvivalGlobalConfigPage />}
             />
+            <Route path="changelog" element={<ChangelogPage />} />
           </Route>
         </Routes>
       </HashRouter>

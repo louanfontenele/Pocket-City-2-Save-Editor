@@ -1,6 +1,6 @@
 {
-  "name": "shadcn-dashboard",
-  "version": "0.1.0",
+  "name": "pocket-city-2-save-editor",
+  "version": "1.1.0",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -10,6 +10,7 @@
     "lint": "eslint",
     "electron:dev": "node scripts/build-backend.cjs && vite & electron . --dev",
     "electron:build": "vite build && node scripts/build-backend.cjs && electron-builder --win",
+    "electron:build:mac": "vite build && node scripts/build-backend.cjs && electron-builder --mac",
     "electron:pack": "vite build && node scripts/build-backend.cjs && electron-builder --dir"
   },
   "build": {
@@ -35,6 +36,13 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": null,
+      "category": "public.app-category.utilities"
     }
   },
   "dependencies": {
