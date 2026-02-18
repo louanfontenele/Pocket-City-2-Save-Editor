@@ -102,15 +102,36 @@ function fileExists(p) {
 }
 async function readEs3(filePath) {
   const data = await fs.readFile(filePath);
+  const innerName = extractGzipHeaderName(data);
   const u8 = (0, import_pako.ungzip)(data);
   const text = typeof u8.buffer === "undefined" ? td.decode(u8) : td.decode(u8);
-  return { text, innerName: null };
+  return { text, innerName };
 }
 async function writeEs3(filePath, text, innerNameGuess) {
   const nameForHeader = innerNameGuess ?? path.basename(filePath);
   const input = te.encode(text);
   const gz = (0, import_pako.gzip)(input, { header: { name: nameForHeader } });
   await fs.writeFile(filePath, gz);
+}
+function extractGzipHeaderName(data) {
+  if (data.length < 10) return null;
+  if (data[0] !== 31 || data[1] !== 139) return null;
+  if (data[2] !== 8) return null;
+  const flg = data[3];
+  let pos = 10;
+  if (flg & 4) {
+    if (pos + 2 > data.length) return null;
+    const xlen = data[pos] | data[pos + 1] << 8;
+    pos += 2 + xlen;
+    if (pos > data.length) return null;
+  }
+  if (flg & 8) {
+    const start = pos;
+    while (pos < data.length && data[pos] !== 0) pos++;
+    if (pos >= data.length) return null;
+    return td.decode(data.slice(start, pos));
+  }
+  return null;
 }
 function parseLooseJson(text) {
   if (text.charCodeAt(0) === 65279) {
@@ -185,9 +206,8 @@ function scanBalancedBraces(text, openIndex) {
 function findFirstBlock(text, key, withinStart = 0, withinEnd = text.length) {
   const slice = text.slice(withinStart, withinEnd);
   const keyRe = new RegExp(
-    `([\\{,
-\r	s])("?${escapeRegExp(key)}"?)\\s*:\\s*\\{`,
-    "g"
+    `(^|[\\{,\\s])("?${escapeRegExp(key)}"?)\\s*:\\s*\\{`,
+    "gm"
   );
   let m;
   while (m = keyRe.exec(slice)) {
@@ -200,14 +220,20 @@ function findFirstBlock(text, key, withinStart = 0, withinEnd = text.length) {
       const lineStart = text.lastIndexOf("\n", absIndex) + 1;
       const indent = text.slice(lineStart, absIndex).match(/^[\t ]*/)?.[0] ?? "";
       let hadComma = false;
+      let trailingCommaChars = 0;
       const after = text.slice(braceEnd + 1);
       const m2 = after.match(/^([\t\r\n ]*),/);
-      if (m2) hadComma = true;
+      if (m2) {
+        hadComma = true;
+        trailingCommaChars = m2[0].length;
+      }
       return {
         keyStart: absIndex,
         braceStart,
         braceEnd,
         hadTrailingComma: hadComma,
+        trailingCommaChars,
+        keyRaw: m[2],
         indent
       };
     } catch {
@@ -235,6 +261,15 @@ function extractBlockInner(text, pos) {
 }
 function replaceBlock(text, block, newInner) {
   return text.slice(0, block.start + 1) + newInner + text.slice(block.end);
+}
+function appendNamedObjectBlock(inner, keyExpr, newInnerBlock, indentBase) {
+  const trimmed = inner.replace(/\s*$/, "");
+  const trailingWS = inner.slice(trimmed.length);
+  const hasContent = trimmed.trim().length > 0;
+  const needsComma = hasContent && !/,\s*$/.test(trimmed);
+  return trimmed + (needsComma ? "," : "") + `
+${indentBase}  ${keyExpr} : {${newInnerBlock}},
+${indentBase}` + trailingWS;
 }
 function parseNumericObjectBlock(inner) {
   const result = {};
@@ -272,9 +307,7 @@ function buildBooleanObjectBlock(entries, indentBase) {
 }
 function getScalarInBlock(inner, key) {
   const re = new RegExp(
-    `(^|[
-\r,s])(?:"?${escapeRegExp(key)}"?)s*:s*([^,
-\r}]+)`,
+    `(^|[\\n\\r,\\s])(?:"?${escapeRegExp(key)}"?)\\s*:\\s*([^,\\n\\r}]+)`,
     "m"
   );
   const m = inner.match(re);
@@ -308,8 +341,7 @@ function extractBooleanScalarLoose(text, key) {
 }
 function setScalarInBlock(inner, key, rawValue, indentBase) {
   const keyRe = new RegExp(
-    `(^[	 ]*)("?${escapeRegExp(key)}"?s*:\\s*)([^,
-\r}]+)`,
+    `(^[\\t ]*)("?${escapeRegExp(key)}"?\\s*:\\s*)([^,\\n\\r}]+)`,
     "m"
   );
   const m = inner.match(keyRe);
@@ -321,9 +353,12 @@ function setScalarInBlock(inner, key, rawValue, indentBase) {
     return pre + rawValue + post;
   }
   const innerIndent = indentBase + "  ";
-  const trimmed = inner.trimEnd();
+  const trimmed = inner.replace(/\s*$/, "");
   const trailingWS = inner.slice(trimmed.length);
-  const insertion = `${inner.length && !inner.trim() ? "" : "\n"}${innerIndent}${key}: ${rawValue},
+  const hasContent = trimmed.trim().length > 0;
+  const needsComma = hasContent && !/,\s*$/.test(trimmed);
+  const insertion = `${needsComma ? "," : ""}
+${innerIndent}"${key}" : ${rawValue},
 ${indentBase}`;
   const newInner = trimmed + insertion + trailingWS;
   return newInner;
@@ -372,7 +407,7 @@ async function readSaveRelationships(filePath) {
 async function writeSaveRelationships(filePath, relationships) {
   const backup = await createSaveBackup(filePath).catch(() => null);
   const backupPath = backup?.backupPath;
-  const { text } = await readEs3(filePath);
+  const { text, innerName } = await readEs3(filePath);
   const valuePos = findPathBlock(text, ["CITY", "value"]) ?? {
     start: 0,
     end: text.length,
@@ -392,12 +427,14 @@ async function writeSaveRelationships(filePath, relationships) {
       relationships.map((x) => ({ id: x.id, value: Number(x.level) || 0 })),
       block2.indent + "  "
     );
-    const insertion = `
-${block2.indent}  relationships: {${newInnerBlock2}},
-${block2.indent}`;
-    const newInner = innerOld.replace(/\s*$/, "") + insertion;
+    const newInner = appendNamedObjectBlock(
+      innerOld,
+      '"relationships"',
+      newInnerBlock2,
+      block2.indent
+    );
     const newText2 = replaceBlock(text, block2, newInner);
-    await writeEs3(filePath, newText2);
+    await writeEs3(filePath, newText2, innerName ?? void 0);
     return { ok: true, backupPath, fallback: true };
   }
   const block = { start: relPos.braceStart, end: relPos.braceEnd };
@@ -406,8 +443,10 @@ ${block2.indent}`;
     relationships.map((x) => ({ id: x.id, value: Number(x.level) || 0 })),
     indentBase
   );
-  const newText = text.slice(0, relPos.keyStart) + `${relPos.indent}relationships: {${newInnerBlock}}` + (relPos.hadTrailingComma ? "," : "") + text.slice(relPos.braceEnd + (relPos.hadTrailingComma ? 2 : 1));
-  await writeEs3(filePath, newText);
+  const newText = text.slice(0, relPos.keyStart) + `${relPos.indent}${relPos.keyRaw} : {${newInnerBlock}}` + (relPos.hadTrailingComma ? "," : "") + text.slice(
+    relPos.braceEnd + 1 + (relPos.hadTrailingComma ? relPos.trailingCommaChars : 0)
+  );
+  await writeEs3(filePath, newText, innerName ?? void 0);
   return { ok: true, backupPath };
 }
 async function readSaveResources(filePath) {
@@ -454,7 +493,7 @@ async function readSaveResources(filePath) {
 async function writeSaveResources(filePath, resources) {
   const backup = await createSaveBackup(filePath).catch(() => null);
   const backupPath = backup?.backupPath;
-  const { text } = await readEs3(filePath);
+  const { text, innerName } = await readEs3(filePath);
   const valuePos = findPathBlock(text, ["CITY", "value"]) ?? {
     start: 0,
     end: text.length,
@@ -477,12 +516,14 @@ async function writeSaveResources(filePath, resources) {
       })),
       block.indent + "  "
     );
-    const insertion = `
-${block.indent}  resources: {${newInnerBlock2}},
-${block.indent}`;
-    const newInner = innerOld.replace(/\s*$/, "") + insertion;
+    const newInner = appendNamedObjectBlock(
+      innerOld,
+      '"resources"',
+      newInnerBlock2,
+      block.indent
+    );
     const newText2 = replaceBlock(text, block, newInner);
-    await writeEs3(filePath, newText2);
+    await writeEs3(filePath, newText2, innerName ?? void 0);
     return { ok: true, backupPath, fallback: true };
   }
   const newInnerBlock = buildNumericObjectBlock(
@@ -492,8 +533,10 @@ ${block.indent}`;
     })),
     resPos.indent + "  "
   );
-  const newText = text.slice(0, resPos.keyStart) + `${resPos.indent}resources: {${newInnerBlock}}` + (resPos.hadTrailingComma ? "," : "") + text.slice(resPos.braceEnd + (resPos.hadTrailingComma ? 2 : 1));
-  await writeEs3(filePath, newText);
+  const newText = text.slice(0, resPos.keyStart) + `${resPos.indent}${resPos.keyRaw} : {${newInnerBlock}}` + (resPos.hadTrailingComma ? "," : "") + text.slice(
+    resPos.braceEnd + 1 + (resPos.hadTrailingComma ? resPos.trailingCommaChars : 0)
+  );
+  await writeEs3(filePath, newText, innerName ?? void 0);
   return { ok: true, backupPath };
 }
 async function readSaveCars(filePath) {
@@ -537,7 +580,7 @@ async function readSaveCars(filePath) {
 async function writeSaveCars(filePath, cars) {
   const backup = await createSaveBackup(filePath).catch(() => null);
   const backupPath = backup?.backupPath;
-  const { text } = await readEs3(filePath);
+  const { text, innerName } = await readEs3(filePath);
   const valuePos = findPathBlock(text, ["CITY", "value"]) ?? {
     start: 0,
     end: text.length,
@@ -557,26 +600,30 @@ async function writeSaveCars(filePath, cars) {
       cars.map((x) => ({ id: x.id, value: Boolean(x.unlocked) })),
       block.indent + "  "
     );
-    const insertion = `
-${block.indent}  unlockedCars: {${newInnerBlock2}},
-${block.indent}`;
-    const newInner = innerOld.replace(/\s*$/, "") + insertion;
+    const newInner = appendNamedObjectBlock(
+      innerOld,
+      '"unlockedCars"',
+      newInnerBlock2,
+      block.indent
+    );
     const newText2 = replaceBlock(text, block, newInner);
-    await writeEs3(filePath, newText2);
+    await writeEs3(filePath, newText2, innerName ?? void 0);
     return { ok: true, backupPath, fallback: true };
   }
   const newInnerBlock = buildBooleanObjectBlock(
     cars.map((x) => ({ id: x.id, value: Boolean(x.unlocked) })),
     carPos.indent + "  "
   );
-  const newText = text.slice(0, carPos.keyStart) + `${carPos.indent}unlockedCars: {${newInnerBlock}}` + (carPos.hadTrailingComma ? "," : "") + text.slice(carPos.braceEnd + (carPos.hadTrailingComma ? 2 : 1));
-  await writeEs3(filePath, newText);
+  const newText = text.slice(0, carPos.keyStart) + `${carPos.indent}${carPos.keyRaw} : {${newInnerBlock}}` + (carPos.hadTrailingComma ? "," : "") + text.slice(
+    carPos.braceEnd + 1 + (carPos.hadTrailingComma ? carPos.trailingCommaChars : 0)
+  );
+  await writeEs3(filePath, newText, innerName ?? void 0);
   return { ok: true, backupPath };
 }
 async function patchSaveScalars(filePath, patch) {
   const backup = await createSaveBackup(filePath).catch(() => null);
   const backupPath = backup?.backupPath;
-  const { text } = await readEs3(filePath);
+  const { text, innerName } = await readEs3(filePath);
   const valueBlock = findPathBlock(text, ["CITY", "value"]) ?? {
     start: 0,
     end: text.length,
@@ -682,7 +729,7 @@ async function patchSaveScalars(filePath, patch) {
     }
   }
   const newText = replaceBlock(text, valueBlock, innerNew);
-  await writeEs3(filePath, newText);
+  await writeEs3(filePath, newText, innerName ?? void 0);
   return { ok: true, backupPath };
 }
 async function readSaveSnapshot(filePath) {
@@ -961,7 +1008,7 @@ async function scanAllSaves(startDirs) {
   return results;
 }
 function extractFileId(text) {
-  const m = text.match(/FILE_ID\s*:\s*"([^"]*)"/) ?? text.match(/FILE_ID\s*:\s*([^,\s}]+)/);
+  const m = text.match(/["']?FILE_ID["']?\s*:\s*"([^"]*)"/) ?? text.match(/["']?FILE_ID["']?\s*:\s*([^,\s}]+)/);
   return m ? m[1].trim() : "";
 }
 function buildTimestamp() {
@@ -1055,10 +1102,11 @@ async function listSaveBackups(filePath) {
         const files = await fs.readdir(tsPath, { withFileTypes: true });
         for (const f of files) {
           if (!f.isFile()) continue;
+          if (f.name !== base) continue;
           const full = path.join(tsPath, f.name);
           const st = await fs.stat(full);
           items.push({
-            name: f.name,
+            name: base,
             backupPath: full,
             sizeBytes: st.size,
             mtime: st.mtimeMs ?? st.mtime.getTime()
@@ -1248,7 +1296,7 @@ async function deleteGlobalSettings(dataDir) {
 }
 async function writeSaveFromPatch(filePath, patch) {
   const { backupPath } = await createSaveBackup(filePath);
-  const { text } = await readEs3(filePath);
+  const { text, innerName } = await readEs3(filePath);
   const valueBlock = findPathBlock(text, ["CITY", "value"]) ?? {
     start: 0,
     end: text.length,
@@ -1337,15 +1385,34 @@ async function writeSaveFromPatch(filePath, patch) {
       newValueBlock.end + 1
     );
     if (blk) {
-      const newInnerBlock = buildNumericObjectBlock(entries, blk.indent + "  ");
-      newText = newText.slice(0, blk.keyStart) + `${blk.indent}${key}: {${newInnerBlock}}` + (blk.hadTrailingComma ? "," : "") + newText.slice(blk.braceEnd + (blk.hadTrailingComma ? 2 : 1));
+      const oldInner = extractBlockInner(newText, {
+        start: blk.braceStart,
+        end: blk.braceEnd
+      });
+      const mergedMap = parseNumericObjectBlock(oldInner);
+      for (const e of entries) {
+        mergedMap[e.id] = e.value;
+      }
+      const mergedEntries = Object.keys(mergedMap).map((k) => ({
+        id: Number(k),
+        value: mergedMap[Number(k)]
+      })).filter((e) => Number.isFinite(e.id) && Number.isFinite(e.value));
+      const newInnerBlock = buildNumericObjectBlock(
+        mergedEntries,
+        blk.indent + "  "
+      );
+      newText = newText.slice(0, blk.keyStart) + `${blk.indent}${blk.keyRaw} : {${newInnerBlock}}` + (blk.hadTrailingComma ? "," : "") + newText.slice(
+        blk.braceEnd + 1 + (blk.hadTrailingComma ? blk.trailingCommaChars : 0)
+      );
     } else {
       const vb = newValueBlock;
       const valInner = extractBlockInner(newText, vb);
-      const insertion = `
-${vb.indent}  ${key}: {${buildNumericObjectBlock(entries, vb.indent + "  ")}},
-${vb.indent}`;
-      const replaced = valInner.replace(/\s*$/, "") + insertion;
+      const replaced = appendNamedObjectBlock(
+        valInner,
+        `"${key}"`,
+        buildNumericObjectBlock(entries, vb.indent + "  "),
+        vb.indent
+      );
       newText = replaceBlock(newText, vb, replaced);
     }
   };
@@ -1362,15 +1429,34 @@ ${vb.indent}`;
       newValueBlock.end + 1
     );
     if (blk) {
-      const newInnerBlock = buildBooleanObjectBlock(entries, blk.indent + "  ");
-      newText = newText.slice(0, blk.keyStart) + `${blk.indent}${key}: {${newInnerBlock}}` + (blk.hadTrailingComma ? "," : "") + newText.slice(blk.braceEnd + (blk.hadTrailingComma ? 2 : 1));
+      const oldInner = extractBlockInner(newText, {
+        start: blk.braceStart,
+        end: blk.braceEnd
+      });
+      const mergedMap = parseBooleanObjectBlock(oldInner);
+      for (const e of entries) {
+        mergedMap[e.id] = e.value;
+      }
+      const mergedEntries = Object.keys(mergedMap).map((k) => ({
+        id: Number(k),
+        value: mergedMap[Number(k)]
+      })).filter((e) => Number.isFinite(e.id));
+      const newInnerBlock = buildBooleanObjectBlock(
+        mergedEntries,
+        blk.indent + "  "
+      );
+      newText = newText.slice(0, blk.keyStart) + `${blk.indent}${blk.keyRaw} : {${newInnerBlock}}` + (blk.hadTrailingComma ? "," : "") + newText.slice(
+        blk.braceEnd + 1 + (blk.hadTrailingComma ? blk.trailingCommaChars : 0)
+      );
     } else {
       const vb = newValueBlock;
       const valInner = extractBlockInner(newText, vb);
-      const insertion = `
-${vb.indent}  ${key}: {${buildBooleanObjectBlock(entries, vb.indent + "  ")}},
-${vb.indent}`;
-      const replaced = valInner.replace(/\s*$/, "") + insertion;
+      const replaced = appendNamedObjectBlock(
+        valInner,
+        `"${key}"`,
+        buildBooleanObjectBlock(entries, vb.indent + "  "),
+        vb.indent
+      );
       newText = replaceBlock(newText, vb, replaced);
     }
   };
@@ -1401,7 +1487,7 @@ ${vb.indent}`;
       }))
     );
   }
-  await writeEs3(filePath, newText);
+  await writeEs3(filePath, newText, innerName ?? void 0);
   const fileId = extractFileId(text);
   const idForBackup = fileId || (() => {
     const ext = path.extname(path.basename(filePath));

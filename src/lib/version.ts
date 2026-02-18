@@ -14,11 +14,31 @@ export type ChangelogEntry = {
   };
 };
 
-export const APP_VERSION = "1.1.0";
-export const BUILD_DATE = "2026-02-17";
+export const APP_VERSION = "1.2.0";
+export const BUILD_DATE = "2026-02-18";
 export const VERSION_DISPLAY = APP_VERSION;
 
 export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: "1.2.0",
+    date: "2026-02-18",
+    changes: {
+      en: [
+        "Fixed save corruption during patch operations by preserving quoted object keys used by Pocket City 2 save format",
+        "Improved ES3 text patching stability with safer block replacement and scalar updates",
+        "Preserved gzip inner filename when rewriting .es3 files",
+        "Fixed backup discovery/listing to map by FILE_ID while keeping original save filenames",
+        "Set Max no longer modifies map day/time or map size",
+      ],
+      "pt-br": [
+        "Corrigida a corrupção de saves durante operações de patch ao preservar chaves de objeto com aspas usadas pelo formato de save do Pocket City 2",
+        "Melhorada a estabilidade do patch de texto ES3 com substituição de blocos e atualização de escalares mais seguras",
+        "Preservado o nome interno no gzip ao reescrever arquivos .es3",
+        "Corrigida a descoberta/listagem de backups para mapear por FILE_ID mantendo os nomes originais dos saves",
+        "Set Max não altera mais o dia/horário nem o tamanho do mapa",
+      ],
+    },
+  },
   {
     version: "1.1.0",
     date: "2026-02-17",
@@ -37,6 +57,7 @@ export const CHANGELOG: ChangelogEntry[] = [
         "Adicionado suporte a macOS para detecção do diretório de saves",
         "Adicionado alvo de build para macOS no Electron",
         "README completamente redesenhado com emojis, badges e documentação estruturada",
+        "Correção: evita corrupção de save; backups agora preservam nomes originais dos arquivos e mantêm a estrutura do save intacta.",
       ],
     },
   },

@@ -221,7 +221,6 @@ function registerIpcHandlers() {
               patch = {
                 money: 1_000_000_000_000,
                 researchPoints: 999_999,
-                mapSize: 88,
                 resources: RESOURCE_IDS.map((id) => ({
                   id,
                   amount: 999_999,

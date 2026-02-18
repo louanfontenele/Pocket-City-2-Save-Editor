@@ -88,14 +88,14 @@ export async function readEs3(
   filePath: string,
 ): Promise<{ text: string; innerName: string | null }> {
   const data = await fs.readFile(filePath);
+  const innerName = extractGzipHeaderName(data);
   // Decompress to bytes, then decode as UTF-8
   const u8 = ungzip(data);
   const text =
     typeof (u8 as any).buffer === "undefined"
       ? td.decode(u8 as any)
       : td.decode(u8 as Uint8Array);
-  // Pako ungzip result does not expose header; we cannot reliably extract original name
-  return { text, innerName: null };
+  return { text, innerName };
 }
 
 export async function writeEs3(
@@ -113,6 +113,33 @@ export async function writeEs3(
   // Include gzip header name when possible (pako supports header.name)
   const gz = gzip(input, { header: { name: nameForHeader } } as any);
   await fs.writeFile(filePath, gz);
+}
+
+function extractGzipHeaderName(data: Uint8Array): string | null {
+  if (data.length < 10) return null;
+  if (data[0] !== 0x1f || data[1] !== 0x8b) return null;
+  if (data[2] !== 0x08) return null; // deflate only
+
+  const flg = data[3];
+  let pos = 10;
+
+  // FEXTRA
+  if (flg & 0x04) {
+    if (pos + 2 > data.length) return null;
+    const xlen = data[pos] | (data[pos + 1] << 8);
+    pos += 2 + xlen;
+    if (pos > data.length) return null;
+  }
+
+  // FNAME
+  if (flg & 0x08) {
+    const start = pos;
+    while (pos < data.length && data[pos] !== 0x00) pos++;
+    if (pos >= data.length) return null;
+    return td.decode(data.slice(start, pos));
+  }
+
+  return null;
 }
 
 export function parseLooseJson(text: string): any {
@@ -142,6 +169,8 @@ type BlockPos = {
   braceStart: number;
   braceEnd: number;
   hadTrailingComma: boolean;
+  trailingCommaChars: number;
+  keyRaw: string;
   indent: string;
 };
 
@@ -224,8 +253,8 @@ function findFirstBlock(
 ): BlockPos | null {
   const slice = text.slice(withinStart, withinEnd);
   const keyRe = new RegExp(
-    `([\\{,\n\r\t\s])("?${escapeRegExp(key)}"?)\\s*:\\s*\\{`,
-    "g",
+    `(^|[\\{,\\s])("?${escapeRegExp(key)}"?)\\s*:\\s*\\{`,
+    "gm",
   );
   let m: RegExpExecArray | null;
   while ((m = keyRe.exec(slice))) {
@@ -241,14 +270,20 @@ function findFirstBlock(
         text.slice(lineStart, absIndex).match(/^[\t ]*/)?.[0] ?? "";
       // Trailing comma detection
       let hadComma = false;
+      let trailingCommaChars = 0;
       const after = text.slice(braceEnd + 1);
       const m2 = after.match(/^([\t\r\n ]*),/);
-      if (m2) hadComma = true;
+      if (m2) {
+        hadComma = true;
+        trailingCommaChars = m2[0].length;
+      }
       return {
         keyStart: absIndex,
         braceStart,
         braceEnd,
         hadTrailingComma: hadComma,
+        trailingCommaChars,
+        keyRaw: m[2],
         indent,
       };
     } catch {
@@ -315,6 +350,24 @@ function replaceBlock(
   return text.slice(0, block.start + 1) + newInner + text.slice(block.end);
 }
 
+function appendNamedObjectBlock(
+  inner: string,
+  keyExpr: string,
+  newInnerBlock: string,
+  indentBase: string,
+): string {
+  const trimmed = inner.replace(/\s*$/, "");
+  const trailingWS = inner.slice(trimmed.length);
+  const hasContent = trimmed.trim().length > 0;
+  const needsComma = hasContent && !/,\s*$/.test(trimmed);
+  return (
+    trimmed +
+    (needsComma ? "," : "") +
+    `\n${indentBase}  ${keyExpr} : {${newInnerBlock}},\n${indentBase}` +
+    trailingWS
+  );
+}
+
 function parseNumericObjectBlock(inner: string): Record<number, number> {
   const result: Record<number, number> = {};
   // Rough parse: lines like 123: 45, or 12: -3,
@@ -366,7 +419,7 @@ function buildBooleanObjectBlock(
 
 function getScalarInBlock(inner: string, key: string): string | null {
   const re = new RegExp(
-    `(^|[\n\r,\s])(?:\"?${escapeRegExp(key)}\"?)\s*:\s*([^,\n\r}]+)`,
+    `(^|[\\n\\r,\\s])(?:\"?${escapeRegExp(key)}\"?)\\s*:\\s*([^,\\n\\r}]+)`,
     "m",
   );
   const m = inner.match(re);
@@ -410,7 +463,7 @@ function setScalarInBlock(
 ): string {
   // Replace existing key value if found, else insert before closing '}'
   const keyRe = new RegExp(
-    `(^[\t ]*)(\"?${escapeRegExp(key)}\"?\s*:\\s*)([^,\n\r}]+)`,
+    `(^[\\t ]*)(\"?${escapeRegExp(key)}\"?\\s*:\\s*)([^,\\n\\r}]+)`,
     "m",
   );
   const m = inner.match(keyRe);
@@ -423,9 +476,11 @@ function setScalarInBlock(
   }
   // Insert new line before end
   const innerIndent = indentBase + "  ";
-  const trimmed = inner.trimEnd();
+  const trimmed = inner.replace(/\s*$/, "");
   const trailingWS = inner.slice(trimmed.length);
-  const insertion = `${inner.length && !inner.trim() ? "" : "\n"}${innerIndent}${key}: ${rawValue},\n${indentBase}`;
+  const hasContent = trimmed.trim().length > 0;
+  const needsComma = hasContent && !/,\s*$/.test(trimmed);
+  const insertion = `${needsComma ? "," : ""}\n${innerIndent}"${key}" : ${rawValue},\n${indentBase}`;
   const newInner = trimmed + insertion + trailingWS;
   return newInner;
 }
@@ -489,7 +544,7 @@ export async function writeSaveRelationships(
 ): Promise<{ ok: boolean; backupPath?: string; fallback?: boolean }> {
   const backup = await createSaveBackup(filePath).catch(() => null);
   const backupPath = backup?.backupPath;
-  const { text } = await readEs3(filePath);
+  const { text, innerName } = await readEs3(filePath);
   // Always use regex-based patching to preserve the game's non-standard JSON format.
   const valuePos = findPathBlock(text, ["CITY", "value"]) ?? {
     start: 0,
@@ -511,10 +566,14 @@ export async function writeSaveRelationships(
       relationships.map((x) => ({ id: x.id, value: Number(x.level) || 0 })),
       block.indent + "  ",
     );
-    const insertion = `\n${block.indent}  relationships: {${newInnerBlock}},\n${block.indent}`;
-    const newInner = innerOld.replace(/\s*$/, "") + insertion;
+    const newInner = appendNamedObjectBlock(
+      innerOld,
+      '"relationships"',
+      newInnerBlock,
+      block.indent,
+    );
     const newText = replaceBlock(text, block, newInner);
-    await writeEs3(filePath, newText);
+    await writeEs3(filePath, newText, innerName ?? undefined);
     return { ok: true, backupPath, fallback: true };
   }
   const block = { start: relPos.braceStart, end: relPos.braceEnd };
@@ -525,10 +584,14 @@ export async function writeSaveRelationships(
   );
   const newText =
     text.slice(0, relPos.keyStart) +
-    `${relPos.indent}relationships: {${newInnerBlock}}` +
+    `${relPos.indent}${relPos.keyRaw} : {${newInnerBlock}}` +
     (relPos.hadTrailingComma ? "," : "") +
-    text.slice(relPos.braceEnd + (relPos.hadTrailingComma ? 2 : 1));
-  await writeEs3(filePath, newText);
+    text.slice(
+      relPos.braceEnd +
+        1 +
+        (relPos.hadTrailingComma ? relPos.trailingCommaChars : 0),
+    );
+  await writeEs3(filePath, newText, innerName ?? undefined);
   return { ok: true, backupPath };
 }
 
@@ -590,7 +653,7 @@ export async function writeSaveResources(
 ): Promise<{ ok: boolean; backupPath?: string; fallback?: boolean }> {
   const backup = await createSaveBackup(filePath).catch(() => null);
   const backupPath = backup?.backupPath;
-  const { text } = await readEs3(filePath);
+  const { text, innerName } = await readEs3(filePath);
   // Always use regex-based patching to preserve the game's non-standard JSON format.
   const valuePos = findPathBlock(text, ["CITY", "value"]) ?? {
     start: 0,
@@ -614,10 +677,14 @@ export async function writeSaveResources(
       })),
       block.indent + "  ",
     );
-    const insertion = `\n${block.indent}  resources: {${newInnerBlock}},\n${block.indent}`;
-    const newInner = innerOld.replace(/\s*$/, "") + insertion;
+    const newInner = appendNamedObjectBlock(
+      innerOld,
+      '"resources"',
+      newInnerBlock,
+      block.indent,
+    );
     const newText = replaceBlock(text, block, newInner);
-    await writeEs3(filePath, newText);
+    await writeEs3(filePath, newText, innerName ?? undefined);
     return { ok: true, backupPath, fallback: true };
   }
   const newInnerBlock = buildNumericObjectBlock(
@@ -629,10 +696,14 @@ export async function writeSaveResources(
   );
   const newText =
     text.slice(0, resPos.keyStart) +
-    `${resPos.indent}resources: {${newInnerBlock}}` +
+    `${resPos.indent}${resPos.keyRaw} : {${newInnerBlock}}` +
     (resPos.hadTrailingComma ? "," : "") +
-    text.slice(resPos.braceEnd + (resPos.hadTrailingComma ? 2 : 1));
-  await writeEs3(filePath, newText);
+    text.slice(
+      resPos.braceEnd +
+        1 +
+        (resPos.hadTrailingComma ? resPos.trailingCommaChars : 0),
+    );
+  await writeEs3(filePath, newText, innerName ?? undefined);
   return { ok: true, backupPath };
 }
 
@@ -689,7 +760,7 @@ export async function writeSaveCars(
 ): Promise<{ ok: boolean; backupPath?: string; fallback?: boolean }> {
   const backup = await createSaveBackup(filePath).catch(() => null);
   const backupPath = backup?.backupPath;
-  const { text } = await readEs3(filePath);
+  const { text, innerName } = await readEs3(filePath);
   // Always use regex-based patching to preserve the game's non-standard JSON format.
   const valuePos = findPathBlock(text, ["CITY", "value"]) ?? {
     start: 0,
@@ -710,10 +781,14 @@ export async function writeSaveCars(
       cars.map((x) => ({ id: x.id, value: Boolean(x.unlocked) })),
       block.indent + "  ",
     );
-    const insertion = `\n${block.indent}  unlockedCars: {${newInnerBlock}},\n${block.indent}`;
-    const newInner = innerOld.replace(/\s*$/, "") + insertion;
+    const newInner = appendNamedObjectBlock(
+      innerOld,
+      '"unlockedCars"',
+      newInnerBlock,
+      block.indent,
+    );
     const newText = replaceBlock(text, block, newInner);
-    await writeEs3(filePath, newText);
+    await writeEs3(filePath, newText, innerName ?? undefined);
     return { ok: true, backupPath, fallback: true };
   }
   const newInnerBlock = buildBooleanObjectBlock(
@@ -722,10 +797,14 @@ export async function writeSaveCars(
   );
   const newText =
     text.slice(0, carPos.keyStart) +
-    `${carPos.indent}unlockedCars: {${newInnerBlock}}` +
+    `${carPos.indent}${carPos.keyRaw} : {${newInnerBlock}}` +
     (carPos.hadTrailingComma ? "," : "") +
-    text.slice(carPos.braceEnd + (carPos.hadTrailingComma ? 2 : 1));
-  await writeEs3(filePath, newText);
+    text.slice(
+      carPos.braceEnd +
+        1 +
+        (carPos.hadTrailingComma ? carPos.trailingCommaChars : 0),
+    );
+  await writeEs3(filePath, newText, innerName ?? undefined);
   return { ok: true, backupPath };
 }
 
@@ -751,7 +830,7 @@ export async function patchSaveScalars(
 ): Promise<{ ok: boolean; backupPath?: string; fallback?: boolean }> {
   const backup = await createSaveBackup(filePath).catch(() => null);
   const backupPath = backup?.backupPath;
-  const { text } = await readEs3(filePath);
+  const { text, innerName } = await readEs3(filePath);
   // Always use regex-based patching to preserve the game's non-standard JSON format.
   const valueBlock = findPathBlock(text, ["CITY", "value"]) ?? {
     start: 0,
@@ -862,7 +941,7 @@ export async function patchSaveScalars(
   }
 
   const newText = replaceBlock(text, valueBlock, innerNew);
-  await writeEs3(filePath, newText);
+  await writeEs3(filePath, newText, innerName ?? undefined);
   return { ok: true, backupPath };
 }
 
@@ -1250,8 +1329,8 @@ export async function scanAllSaves(startDirs: string[]): Promise<
 /** Quick extraction of FILE_ID from raw ES3 text via regex (avoids full parse). */
 function extractFileId(text: string): string {
   const m =
-    text.match(/FILE_ID\s*:\s*"([^"]*)"/) ??
-    text.match(/FILE_ID\s*:\s*([^,\s}]+)/);
+    text.match(/["']?FILE_ID["']?\s*:\s*"([^"]*)"/) ??
+    text.match(/["']?FILE_ID["']?\s*:\s*([^,\s}]+)/);
   return m ? m[1].trim() : "";
 }
 
@@ -1390,10 +1469,11 @@ export async function listSaveBackups(
         const files = await fs.readdir(tsPath, { withFileTypes: true });
         for (const f of files) {
           if (!f.isFile()) continue;
+          if (f.name !== base) continue;
           const full = path.join(tsPath, f.name);
           const st = await fs.stat(full);
           items.push({
-            name: f.name,
+            name: base,
             backupPath: full,
             sizeBytes: st.size,
             mtime: st.mtimeMs ?? st.mtime.getTime(),
@@ -1653,7 +1733,7 @@ export async function writeSaveFromPatch(
   patch: SavePatch,
 ): Promise<{ ok: boolean; backupPath?: string; fallback?: boolean }> {
   const { backupPath } = await createSaveBackup(filePath);
-  const { text } = await readEs3(filePath);
+  const { text, innerName } = await readEs3(filePath);
   // Always use regex-based patching to preserve the game's non-standard JSON format.
   // The game uses composite object keys (e.g. {Item1:56,Item2:54}:value) that
   // JSON.stringify cannot represent — re-serializing would corrupt the save file.
@@ -1754,18 +1834,43 @@ export async function writeSaveFromPatch(
       newValueBlock.end + 1,
     );
     if (blk) {
-      const newInnerBlock = buildNumericObjectBlock(entries, blk.indent + "  ");
+      const oldInner = extractBlockInner(newText, {
+        start: blk.braceStart,
+        end: blk.braceEnd,
+      });
+      const mergedMap = parseNumericObjectBlock(oldInner);
+      for (const e of entries) {
+        mergedMap[e.id] = e.value;
+      }
+      const mergedEntries = Object.keys(mergedMap)
+        .map((k) => ({
+          id: Number(k),
+          value: mergedMap[Number(k)],
+        }))
+        .filter((e) => Number.isFinite(e.id) && Number.isFinite(e.value));
+      const newInnerBlock = buildNumericObjectBlock(
+        mergedEntries,
+        blk.indent + "  ",
+      );
       newText =
         newText.slice(0, blk.keyStart) +
-        `${blk.indent}${key}: {${newInnerBlock}}` +
+        `${blk.indent}${blk.keyRaw} : {${newInnerBlock}}` +
         (blk.hadTrailingComma ? "," : "") +
-        newText.slice(blk.braceEnd + (blk.hadTrailingComma ? 2 : 1));
+        newText.slice(
+          blk.braceEnd +
+            1 +
+            (blk.hadTrailingComma ? blk.trailingCommaChars : 0),
+        );
     } else {
       // Insert
       const vb = newValueBlock;
       const valInner = extractBlockInner(newText, vb);
-      const insertion = `\n${vb.indent}  ${key}: {${buildNumericObjectBlock(entries, vb.indent + "  ")}},\n${vb.indent}`;
-      const replaced = valInner.replace(/\s*$/, "") + insertion;
+      const replaced = appendNamedObjectBlock(
+        valInner,
+        `"${key}"`,
+        buildNumericObjectBlock(entries, vb.indent + "  "),
+        vb.indent,
+      );
       newText = replaceBlock(newText, vb, replaced);
     }
   };
@@ -1785,17 +1890,42 @@ export async function writeSaveFromPatch(
       newValueBlock.end + 1,
     );
     if (blk) {
-      const newInnerBlock = buildBooleanObjectBlock(entries, blk.indent + "  ");
+      const oldInner = extractBlockInner(newText, {
+        start: blk.braceStart,
+        end: blk.braceEnd,
+      });
+      const mergedMap = parseBooleanObjectBlock(oldInner);
+      for (const e of entries) {
+        mergedMap[e.id] = e.value;
+      }
+      const mergedEntries = Object.keys(mergedMap)
+        .map((k) => ({
+          id: Number(k),
+          value: mergedMap[Number(k)],
+        }))
+        .filter((e) => Number.isFinite(e.id));
+      const newInnerBlock = buildBooleanObjectBlock(
+        mergedEntries,
+        blk.indent + "  ",
+      );
       newText =
         newText.slice(0, blk.keyStart) +
-        `${blk.indent}${key}: {${newInnerBlock}}` +
+        `${blk.indent}${blk.keyRaw} : {${newInnerBlock}}` +
         (blk.hadTrailingComma ? "," : "") +
-        newText.slice(blk.braceEnd + (blk.hadTrailingComma ? 2 : 1));
+        newText.slice(
+          blk.braceEnd +
+            1 +
+            (blk.hadTrailingComma ? blk.trailingCommaChars : 0),
+        );
     } else {
       const vb = newValueBlock;
       const valInner = extractBlockInner(newText, vb);
-      const insertion = `\n${vb.indent}  ${key}: {${buildBooleanObjectBlock(entries, vb.indent + "  ")}},\n${vb.indent}`;
-      const replaced = valInner.replace(/\s*$/, "") + insertion;
+      const replaced = appendNamedObjectBlock(
+        valInner,
+        `"${key}"`,
+        buildBooleanObjectBlock(entries, vb.indent + "  "),
+        vb.indent,
+      );
       newText = replaceBlock(newText, vb, replaced);
     }
   };
@@ -1828,7 +1958,7 @@ export async function writeSaveFromPatch(
     );
   }
 
-  await writeEs3(filePath, newText);
+  await writeEs3(filePath, newText, innerName ?? undefined);
 
   // Rotate backups using the FILE_ID-based folder
   const fileId = extractFileId(text);
